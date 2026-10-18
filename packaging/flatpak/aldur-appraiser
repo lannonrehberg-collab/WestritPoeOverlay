@@ -1,0 +1,4 @@
+#!/bin/sh
+# Flatpak entry point: launch the tray overlay by default. Power users can still
+# reach the CLI subcommands via `flatpak run --command=appraiser <id> …`.
+exec appraiser run "$@"

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Aldur Appraiser
+GenericName=PoE2 Reward Appraiser
+Comment=Passive read-only reward-value overlay for Path of Exile 2
+Icon=io.github.t0nd3.AldurAppraiser
+Exec=aldur-appraiser
+Terminal=false
+Categories=Game;Utility;
+Keywords=PoE2;Path of Exile;overlay;pricing;
+StartupNotify=false

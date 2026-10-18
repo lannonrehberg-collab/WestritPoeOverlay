@@ -1,0 +1,12 @@
+* text=auto
+
+# Windows-скрипты должны лежать с CRLF, иначе cmd может спотыкаться на блоках
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Исходники и документация — LF
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

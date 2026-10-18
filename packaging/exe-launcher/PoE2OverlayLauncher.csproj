@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ApplicationIcon>../../assets/icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <UseAppHost>true</UseAppHost>
+    <AssemblyName>PoE2 RU Overlay</AssemblyName>
+    <RootNamespace>PoE2OverlayLauncher</RootNamespace>
+  </PropertyGroup>
+</Project>

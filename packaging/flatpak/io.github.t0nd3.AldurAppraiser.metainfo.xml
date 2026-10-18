@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.t0nd3.AldurAppraiser</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Aldur Appraiser</name>
+  <summary>Passive read-only reward-value overlay for Path of Exile 2</summary>
+
+  <description>
+    <p>
+      Aldur Appraiser is a passive, read-only overlay for Path of Exile 2. It
+      reads the Runeshape Combinations panel of the Ezomyte Remnant, prices each
+      reward option from poe2scout, and shows the value inline next to every
+      choice so you can pick the best one at a glance.
+    </p>
+    <p>Highlights:</p>
+    <ul>
+      <li>Inline value chips at each option, with the best choice highlighted.</li>
+      <li>Excludes the always-paid bonus reward from the ranking and marks rewards it cannot price as unknown rather than guessing.</li>
+      <li>Read-only by design: screen capture and OCR only, via the desktop screen-cast portal. No clipboard, input injection, or memory access.</li>
+      <li>Runs quietly in the system tray.</li>
+    </ul>
+    <p>
+      Use at your own risk: it only reads the screen and draws its own overlay,
+      and is not endorsed by Grinding Gear Games.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.t0nd3.AldurAppraiser.desktop</launchable>
+
+  <url type="homepage">https://github.com/T0nd3/aldur-appraiser</url>
+  <url type="bugtracker">https://github.com/T0nd3/aldur-appraiser/issues</url>
+
+  <developer id="io.github.t0nd3">
+    <name>Benjamin</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.3.2" date="2026-06-29">
+      <description>
+        <p>Adds a tray "Auto mode" that continuously appraises the reward panel without pressing the hotkey, lets you bind any key as the hotkey (including a single key like 0) by just pressing it, and keeps one screen-capture session open while the checker runs so Wayland only asks for screen-share permission once instead of on every check.</p>
+      </description>
+    </release>
+    <release version="0.3.1" date="2026-06-28">
+      <description>
+        <p>Windows fixes: the Temple Planner now opens from the tray menu (the packaged app launched itself the wrong way), and a hotkey that can't be registered — e.g. because the combination is already taken — now warns you instead of failing silently.</p>
+      </description>
+    </release>
+    <release version="0.3.0" date="2026-06-28">
+      <description>
+        <p>Adds the Vaal Temple planner: read the drawn room cards and held medallions off the screen, then get colour-coded best-placement suggestions on a 9×9 grid that respect the in-game adjacency, tier, generator and destabilisation rules. The app now starts to the system tray, where you can launch the price-checker and the temple planner independently and set your own global appraise hotkey.</p>
+      </description>
+    </release>
+    <release version="0.2.4" date="2026-06-19">
+      <description>
+        <p>Fixes detection of long reward lists: scrolling the panel no longer makes the overlay lose the panel and stop showing values.</p>
+      </description>
+    </release>
+    <release version="0.2.3" date="2026-06-16">
+      <description>
+        <p>More accurate pricing: an untracked or mis-read reward name no longer matches an unrelated currency that merely shares a word like "Rune" or "Orb" — it now stays unknown instead of showing a wrong price. Adds the Linux Flatpak build.</p>
+      </description>
+    </release>
+    <release version="0.2.2" date="2026-06-16">
+      <description>
+        <p>Unique-item rewards are now always shown as unknown, the reward ROI captures long option lists, and the inline overlay uses a compact surface to avoid compositor artifacts on other monitors.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,221 @@
+# Generated with flatpak-pip-generator --runtime org.kde.Sdk//6.9 -r requirements.txt -o python-deps --yaml --checker-data --prefer-wheels rapidfuzz,numpy,pillow,shapely,pyclipper,opencv-python,onnxruntime,protobuf,pyyaml --wheel-arches x86_64
+name: python-deps
+buildsystem: simple
+build-commands: []
+modules:
+  - name: python3-httpx
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "httpx>=0.27" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/ba/16/9826f089383c593cdfc4a6e5aca94d9e91ae1692c57af82c3b2aa5e810f7/anyio-4.14.0-py3-none-any.whl
+        sha256: dd9b7a2a9799ed6552fde617b2c5df02b7fdd7d88392fc48101e51bae46164d9
+        x-checker-data:
+          type: pypi
+          name: anyio
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/59/8c/57e832b7af6d7c5abe66eb3fbe3a3a32f4d11ea23a1aa7131371035be991/certifi-2026.5.20-py3-none-any.whl
+        sha256: 3c52e209ba0a4ad7aebe60436a4ab349c39e1e602e8c134221e546902ad25897
+        x-checker-data:
+          type: pypi
+          name: certifi
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl
+        sha256: 63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+        x-checker-data:
+          type: pypi
+          name: h11
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/7e/f5/f66802a942d491edb555dd61e3a9961140fd64c90bce1eafd741609d334d/httpcore-1.0.9-py3-none-any.whl
+        sha256: 2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55
+        x-checker-data:
+          type: pypi
+          name: httpcore
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl
+        sha256: d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+        x-checker-data:
+          type: pypi
+          name: httpx
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl
+        sha256: 7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2
+        x-checker-data:
+          type: pypi
+          name: idna
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/18/67/36e9267722cc04a6b9f15c7f3441c2363321a3ea07da7ae0c0707beb2a9c/typing_extensions-4.15.0-py3-none-any.whl
+        sha256: f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
+        x-checker-data:
+          type: pypi
+          name: typing-extensions
+          packagetype: bdist_wheel
+  - name: python3-platformdirs
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "platformdirs>=4.0" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/81/e6/cd9575ac904136b3cbf7aa7ee819ef86eedb7274e46f230e94ea4342e729/platformdirs-4.10.0-py3-none-any.whl
+        sha256: fb516cdb12eb0d857d0cd85a7c57cea4d060bee4578d6cf5a14dfdf8cbf8784a
+        x-checker-data:
+          type: pypi
+          name: platformdirs
+          packagetype: bdist_wheel
+  - name: python3-rapidfuzz
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "rapidfuzz>=3.0" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/79/72/97a9728c711c7c1b06e107d3f0623880fb4ef90e147ed13c551a1730e7cc/rapidfuzz-3.14.5-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 48bee0b91bebfaec41e1081e351000659ab7570cc4598d617aa04d5bf827f9e6
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: pypi
+          name: rapidfuzz
+          packagetype: bdist_wheel
+  - name: python3-numpy
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "numpy>=1.26" --no-build-isolation
+    sources:
+      - &id001
+        type: file
+        url: https://files.pythonhosted.org/packages/99/60/14115e6364fa676c5397c2ad3004e527e9aa487abf5d0706ec81bbd08529/numpy-2.4.6-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 90f9849678c75fe7afa2d348ac842c168b0a4d3d61919687216dfc547976d853
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: pypi
+          name: numpy
+          packagetype: bdist_wheel
+  - name: python3-mss
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "mss>=9.0" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/f2/c3/313e14f245c79b4c05bd0f3a84a4813aa26fa10f8993aebd91d04c5fad3f/mss-10.2.0-py3-none-any.whl
+        sha256: e79f428899280e7e64e38365b5bfed683851ebea807eeaeadaf06eb8e0d67197
+        x-checker-data:
+          type: pypi
+          name: mss
+          packagetype: bdist_wheel
+  - name: python3-pillow
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "pillow>=10.0" --no-build-isolation
+    sources:
+      - &id002
+        type: file
+        url: https://files.pythonhosted.org/packages/e9/9e/c05e19657fd57841e476be1ab46c4d501bffbadbafdc31a6d665f8b737b6/pillow-12.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: b86024e52a1b269467a802258c25521e6d742349d760728092e1bc2d135b4d76
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: pypi
+          name: pillow
+          packagetype: bdist_wheel
+  - name: python3-rapidocr-onnxruntime
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "rapidocr-onnxruntime>=1.2,<2" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl
+        sha256: 7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4
+        x-checker-data:
+          type: pypi
+          name: flatbuffers
+          packagetype: bdist_wheel
+      - *id001
+      - type: file
+        url: https://files.pythonhosted.org/packages/26/81/24dd9b31b0fb912ee19ca53ac1c9764bfd79d58a2ccef564eb693be831a5/onnxruntime-1.27.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+        sha256: 7c65a7438632d55dfbc8a02ee60bd6cf7dd9d1ba05a43d4b851452f32338e194
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: pypi
+          name: onnxruntime
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/db/07/90b34a8e2cf9c50fe8ed25cac9011cde0676b4d9d9c973751ac7616223a2/opencv_python-4.13.0.92-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: 402033cddf9d294693094de5ef532339f14ce821da3ad7df7c9f6e8316da32cf
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: pypi
+          name: opencv-python
+          packagetype: bdist_wheel
+      - *id002
+      - type: file
+        url: https://files.pythonhosted.org/packages/19/c7/5f7c636ec43e0c545e28d1f1db71990108306f7bdcb89f069ba97e428e7f/protobuf-7.35.1-py3-none-any.whl
+        sha256: 4bc97768d8fe4ad6743c8a19403e314511ed9f6d13205b687e52421c023ac1b9
+        x-checker-data:
+          type: pypi
+          name: protobuf
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/7a/06/6e3e241882bf7d6ab23d9c69ba4e85f1ec47397cbbeee948a16cf75e21ed/pyclipper-1.4.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: d1f807e2b4760a8e5c6d6b4e8c1d71ef52b7fe1946ff088f4fa41e16a881a5ca
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: pypi
+          name: pyclipper
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+        sha256: ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: pypi
+          name: pyyaml
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/ba/12/1e5497183bdbe782dbb91bad1d0d2297dba4d2831b2652657f7517bfc6df/rapidocr_onnxruntime-1.4.4-py3-none-any.whl
+        sha256: 971d7d5f223a7a808662229df1ef69893809d8457d834e6373d3854bc1782cbf
+        x-checker-data:
+          type: pypi
+          name: rapidocr-onnxruntime
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/b9/37/e781683abac55dde9771e086b790e554811a71ed0b2b8a1e789b7430dd44/shapely-2.1.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: 1e7d4d7ad262a48bb44277ca12c7c78cb1b0f56b32c10734ec9a1d30c0b0c54b
+        only-arches:
+          - x86_64
+        x-checker-data:
+          type: pypi
+          name: shapely
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl
+        sha256: 4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+        x-checker-data:
+          type: pypi
+          name: six
+          packagetype: bdist_wheel
+      - type: file
+        url: https://files.pythonhosted.org/packages/eb/75/1a0392bcc21c44dcdf87b3cf2d137e7829be2c083a1e38d44efca3d57a16/tqdm-4.68.2-py3-none-any.whl
+        sha256: d4240441fb5353290b87d6a85968c9decc131a99b8c7faa28269d829de669ede
+        x-checker-data:
+          type: pypi
+          name: tqdm
+          packagetype: bdist_wheel

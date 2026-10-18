@@ -1,0 +1,22 @@
+# Aldur Appraiser configuration.
+# League/base are verified against poe2scout (2026-06-15).
+
+[pricing]
+realm = "poe2"
+league = "Runes of Aldur"   # current league (IsCurrent on poe2scout)
+base = "exalted"            # reference currency; API returns CurrentPrice in this unit
+# Currency categories to pull into the price table. Empty = all categories
+# (currency, runes, essences, fragments, …) so reward types like Lesser runes
+# get priced. Set a specific list to limit it, e.g. ["currency", "runes"].
+categories = []
+cache_ttl_minutes = 20      # prices refresh ~hourly; never fetch per frame
+source = "poe2scout"        # primary source; poe.ninja fallback is future work
+
+[vision]
+# Phase 3+ — placeholder so the file is complete and documents intent.
+monitor = 1                 # target output for multi-monitor setups
+poll_fps = 3
+ocr_engine = "rapidocr"     # primary; "tesseract" used only as fallback if present
+
+[overlay]
+position = "top-right"      # corner-HUD anchor

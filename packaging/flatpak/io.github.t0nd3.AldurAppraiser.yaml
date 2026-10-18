@@ -1,0 +1,74 @@
+id: io.github.t0nd3.AldurAppraiser
+runtime: org.kde.Platform
+runtime-version: '6.9'
+sdk: org.kde.Sdk
+# PySide6 (and its Qt build) comes from the PySide BaseApp, matched to the 6.9
+# runtime, instead of the giant PySide6 pip wheel.
+base: io.qt.PySide.BaseApp
+base-version: '6.9'
+command: aldur-appraiser
+
+finish-args:
+  # poe2scout price fetch, currency-icon download, and the update check.
+  - --share=network
+  # Qt overlay: we run under XWayland (the app forces QT_QPA_PLATFORM=xcb so the
+  # click-through, always-on-top override-redirect overlay floats above the
+  # Proton/XWayland game), so grant both the Wayland and X11 sockets.
+  - --socket=wayland
+  # Real x11 (not fallback): the overlay forces QT_QPA_PLATFORM=xcb and floats an
+  # override-redirect window over the Proton/XWayland game, so it needs a DISPLAY
+  # even in a Wayland session. fallback-x11 doesn't provide one when Wayland is up.
+  - --socket=x11
+  - --share=ipc
+  - --device=dri
+  # System-tray icon (KDE StatusNotifier) + tray notifications.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications
+  # Screen capture goes through the ScreenCast portal (the portal D-Bus is
+  # always reachable); the PipeWire fd is handed over by the portal, so no
+  # extra --socket=pipewire is needed.
+  # Tell the app where its data lives in the pip-installed layout.
+  - --env=ALDUR_RESOURCE_DIR=/app/share/aldur-appraiser
+
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh
+
+modules:
+  # All pure-/binary-Python runtime deps, pinned for offline build (gi,
+  # GStreamer, pipewiresrc come from the KDE runtime; PySide6 from the BaseApp).
+  - python-deps.yaml
+
+  - name: aldur-appraiser
+    buildsystem: simple
+    build-commands:
+      # Install the pre-built, universal (py3-none-any) wheel; deps already in /app.
+      - pip3 install --no-index --no-deps --prefix=${FLATPAK_DEST} aldur_appraiser-0.3.2-py3-none-any.whl
+      # opencv-python (pulled in by rapidocr) bundles its own Qt plugins that
+      # shadow PySide6's and break the xcb platform plugin. We never use cv2's
+      # GUI, so drop them and let PySide6's plugins load.
+      - rm -rf ${FLATPAK_DEST}/lib/python3.12/site-packages/cv2/qt
+      # Launcher (runs `appraiser run` = tray overlay).
+      - install -Dm755 aldur-appraiser ${FLATPAK_DEST}/bin/aldur-appraiser
+      # Bundled data resolved via ALDUR_RESOURCE_DIR.
+      - install -Dm644 config.toml ${FLATPAK_DEST}/share/aldur-appraiser/config.toml
+      - install -Dm644 header_runeshape.png ${FLATPAK_DEST}/share/aldur-appraiser/assets/templates/header_runeshape.png
+      - install -Dm644 icon.png ${FLATPAK_DEST}/share/aldur-appraiser/assets/icon.png
+      # Desktop integration.
+      - install -Dm644 icon.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/io.github.t0nd3.AldurAppraiser.png
+      - install -Dm644 io.github.t0nd3.AldurAppraiser.desktop ${FLATPAK_DEST}/share/applications/io.github.t0nd3.AldurAppraiser.desktop
+      - install -Dm644 io.github.t0nd3.AldurAppraiser.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.t0nd3.AldurAppraiser.metainfo.xml
+    sources:
+      - type: file
+        path: ../../dist/aldur_appraiser-0.3.2-py3-none-any.whl
+      - type: file
+        path: aldur-appraiser
+      - type: file
+        path: ../../config.toml
+      - type: file
+        path: ../../assets/templates/header_runeshape.png
+      - type: file
+        path: ../../assets/icon.png
+      - type: file
+        path: io.github.t0nd3.AldurAppraiser.desktop
+      - type: file
+        path: io.github.t0nd3.AldurAppraiser.metainfo.xml

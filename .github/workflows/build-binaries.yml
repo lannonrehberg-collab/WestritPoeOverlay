@@ -1,0 +1,59 @@
+﻿name: build-windows
+
+# Собирает готовый WestritPoeOverlay.exe (пользователю Python не нужен).
+# Ручной запуск (workflow_dispatch) — только артефакт в Actions.
+# Пуш тега v* — дополнительно прикрепляет файл к GitHub Release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package + build deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[vision,overlay,ru,build]"
+
+      - name: Import check (Qt, OCR, overlay)
+        run: python -c "import aldur_appraiser.ru_app, aldur_appraiser.vision.ocr"
+
+      - name: Build binary
+        run: pyinstaller --noconfirm aldur-appraiser.spec
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WestritPoeOverlay-windows
+          path: dist/WestritPoeOverlay.exe
+
+  release:
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Attach artifacts to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

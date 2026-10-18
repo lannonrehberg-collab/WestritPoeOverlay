@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Локальные настройки, кэш цен и журналы (появляются при запуске)
+runtime/
+config.local.toml
+
+# Готовые сборки и ярлыки (раздаются через Releases)
+*.exe
+*.lnk
+*.flatpak
+
+# Локальные снимки экрана для тестов
+assets/fixtures/*.png
+assets/fixtures/*.jpg
+assets/fixtures/*.jpeg
+
+# Сборка .NET-лаунчера (если понадобится)
+packaging/exe-launcher/bin/
+packaging/exe-launcher/obj/

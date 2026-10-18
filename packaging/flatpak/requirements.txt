@@ -1,0 +1,13 @@
+# Runtime deps for the Flatpak build (resolved/pinned by flatpak-pip-generator
+# against org.kde.Sdk//6.9 = Python 3.12). gi/GStreamer/pipewiresrc come from
+# the KDE runtime, so PyGObject is NOT listed here. opencv-python (full) is
+# pulled in transitively by rapidocr-onnxruntime and provides cv2. PySide6 is
+# NOT listed: it comes from the io.qt.PySide.BaseApp//6.9 base app instead
+# (the pip generator refuses the huge PySide6 wheel and points to the baseapp).
+httpx>=0.27
+platformdirs>=4.0
+rapidfuzz>=3.0
+numpy>=1.26
+mss>=9.0
+pillow>=10.0
+rapidocr-onnxruntime>=1.2,<2
