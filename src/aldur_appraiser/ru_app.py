@@ -2108,6 +2108,10 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
         layout.addLayout(form)
         layout.addWidget(QLabel("Клавиши: <Control><Alt>d, <Control><Shift>r, <Alt>q …"))
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        # Стандартные подписи Qt приходят на английском: перевода Qt в сборке нет,
+        # поэтому «Save»/«Cancel» видели даже в русском окне.
+        buttons.button(QDialogButtonBox.Save).setText("Сохранить")
+        buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)

@@ -634,28 +634,37 @@ def build_catalog(*, warm_gems: bool, started_at: float | None = None,
                     price_kind = "unpriced"
                     price_reason = "no-active-fixed-buyout"
             elif route == "trade":
-                _set_progress(20 + int((index - 1) * 79 / len(rewards)),
-                              "поиск фиксированных лотов", completed=index - 1,
-                              total=len(rewards), current_reward=en_name)
-                trade_unit = book.price_item_trade(base_name, force=True)
-                item_trade_requests += 1
-                if trade_unit is not None:
-                    unit = trade_unit
-                    price_kind = "trade-item"
-                elif estimate is not None:
-                    unit = (estimate[0] + estimate[1]) / 2.0
-                    price_kind = "estimate"
-                    price_reason = "no-active-fixed-buyout; estimate-fallback"
+                # Порядок цены: популярное берём из таблиц (poe.ninja, обменник,
+                # poe2scout) — это секунды. Живой поиск лота нужен только там,
+                # где таблиц не хватает (камни, редкие предметы). Раньше трейд
+                # дёргался для КАЖДОЙ награды, включая те, у которых уже была
+                # цена в таблицах: проход растягивался на 10–20 минут из-за
+                # лимитов сайта, а цена почти не менялась.
+                if market_unit is not None and book.has_bulk_price(en_name):
+                    price_kind = "market"
                 else:
-                    # Для обычного предмета агрегатор не является заменой
-                    # реального fixed-buyout лота. Оставлять старую среднюю
-                    # цифру здесь означало бы отметить скан успешным с
-                    # неактуальной ценой.
-                    unit = None
-                    price_kind = "unpriced"
-                    price_reason = (f"trade-error: {book._last_trade_error}"
-                                    if book._last_trade_error
-                                    else "no-active-fixed-buyout")
+                    _set_progress(20 + int((index - 1) * 79 / len(rewards)),
+                                  "поиск фиксированных лотов", completed=index - 1,
+                                  total=len(rewards), current_reward=en_name)
+                    trade_unit = book.price_item_trade(base_name, force=True)
+                    item_trade_requests += 1
+                    if trade_unit is not None:
+                        unit = trade_unit
+                        price_kind = "trade-item"
+                    elif estimate is not None:
+                        unit = (estimate[0] + estimate[1]) / 2.0
+                        price_kind = "estimate"
+                        price_reason = "no-active-fixed-buyout; estimate-fallback"
+                    else:
+                        # Для обычного предмета агрегатор не является заменой
+                        # реального fixed-buyout лота. Оставлять старую среднюю
+                        # цифру здесь означало бы отметить скан успешным с
+                        # неактуальной ценой.
+                        unit = None
+                        price_kind = "unpriced"
+                        price_reason = (f"trade-error: {book._last_trade_error}"
+                                        if book._last_trade_error
+                                        else "no-active-fixed-buyout")
             elif route == "exchange-range":
                 # Камень без огранки: уровень случаен, поэтому точной цифры нет.
                 # В каталог идёт диапазон уровней обменника, а не одно число.
