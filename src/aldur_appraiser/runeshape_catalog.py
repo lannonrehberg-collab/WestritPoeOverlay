@@ -11,6 +11,7 @@ import html
 import json
 import os
 import re
+import sys
 import time
 import math
 import threading
@@ -799,6 +800,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--market-only", action="store_true",
                         help="обновить весь рынок без запросов цен камней")
     args = parser.parse_args(argv)
+    # Сканер запускается оверлеем без консоли: у такого процесса sys.stdout
+    # равен None, и print просто ничего не печатает. Снаружи это выглядело как
+    # «сканер молча ничего не сделал» — по журналу нельзя было понять, дошёл он
+    # до сети или умер на первом шаге. Уводим вывод в тот же overlay.log.
+    if sys.stdout is None or sys.stderr is None:
+        log = None
+        try:
+            log = open(config_dir() / "overlay.log", "a", encoding="utf-8", buffering=1)
+        except OSError:
+            try:
+                log = open(os.devnull, "w", encoding="utf-8")
+            except OSError:
+                log = None
+        if log is not None:
+            sys.stdout = sys.stdout or log
+            sys.stderr = sys.stderr or log
     # Прокси в проекте не используется: чужая переменная окружения не должна
     # ломать загрузку цен (однажды NO_PROXY со значением [::1] давал
     # httpx.InvalidURL: Invalid port на всех запросах сразу).

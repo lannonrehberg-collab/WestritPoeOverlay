@@ -121,12 +121,32 @@ class Prices:
             pass
 
     def _load(self) -> None:
+        had_cache = False
         try:
-            self.book.use_cache()        # сразу работаем на сохранённых ценах
+            had_cache = self.book.use_cache()   # сразу работаем на сохранённых ценах
             self._remember_cache_mtime()
         except Exception:  # noqa: BLE001
             pass
-        self.ready.set()                 # показывать цены можно уже сейчас
+        # Пока идёт первая загрузка рынка, плашки держатся в состоянии «…»,
+        # а не «?»: иначе 13 секунд ожидания выглядят как «цен нет вообще».
+        if had_cache and self.book.size:
+            self.ready.set()             # показывать цены можно уже сейчас
+        # Первый запуск (файла цен ещё нет): тянем рынок прямо здесь, в этом же
+        # фоновом потоке. Раньше цены зависели только от отдельного процесса-
+        # сканера, и если тот молча не стартовал, оверлей навсегда оставался с
+        # «?» у каждой награды — именно это видели на чистой установке.
+        if not had_cache or not self.book.size:
+            try:
+                print(f"[{time.strftime('%H:%M:%S')}] [цены] сохранённого кэша нет — "
+                      f"качаю рынок", flush=True)
+                started = time.time()
+                self.book.load(force=True)
+                print(f"[{time.strftime('%H:%M:%S')}] [цены] рынок загружен: "
+                      f"{self.book.size} предметов за {time.time() - started:.0f} c",
+                      flush=True)
+            except Exception as exc:  # noqa: BLE001 — без сети живём на пустом рынке
+                self._note_price_error("рынок", exc)
+            self.ready.set()
         # Полный проход дорог для официального trade API. Запускаем его только
         # если полного успешного прохода нет или ему уже сутки; Shift+D всегда
         # работает из локального кэша и не создаёт сетевых запросов.
@@ -149,8 +169,13 @@ class Prices:
                                "aldur_appraiser.runeshape_catalog", *refresh_args]
                     root = Path(__file__).resolve().parents[2]
                 subprocess.Popen(command, cwd=str(root), creationflags=flags, close_fds=True)
+                print(f"[{time.strftime('%H:%M:%S')}] [цены] запущен полный проход "
+                      f"цен: {' '.join(refresh_args)}", flush=True)
             except Exception as exc:  # noqa: BLE001 — приложение должно жить и без сети
                 self.error = f"{type(exc).__name__}: {exc}"
+                # Молчаливый отказ запуска выглядел как «цены просто не пришли».
+                print(f"[{time.strftime('%H:%M:%S')}] [цены] не смог запустить "
+                      f"полный проход: {self.error}", flush=True)
         self._remember_cache_mtime()
         self.ready.set()
 
