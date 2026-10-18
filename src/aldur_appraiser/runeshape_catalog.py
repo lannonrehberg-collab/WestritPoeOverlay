@@ -816,6 +816,14 @@ def main(argv: list[str] | None = None) -> int:
         if log is not None:
             sys.stdout = sys.stdout or log
             sys.stderr = sys.stderr or log
+    # Консоль Windows пишет в cp1251, а в названиях и ценах встречаются «≈» и
+    # «…»: без перевода в UTF-8 print падал и обрывал проход.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None:
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass
     # Прокси в проекте не используется: чужая переменная окружения не должна
     # ломать загрузку цен (однажды NO_PROXY со значением [::1] давал
     # httpx.InvalidURL: Invalid port на всех запросах сразу).

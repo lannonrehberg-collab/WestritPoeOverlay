@@ -2395,6 +2395,14 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Консоль Windows по умолчанию пишет в cp1251, а в тексте цен есть «≈» и
+    # «…» — на них print падал с UnicodeEncodeError и обрывал проверку.
+    for _stream in (sys.stdout, sys.stderr):
+        if _stream is not None:
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass
     parser = argparse.ArgumentParser(prog="ru_app", description="PoE2 RU Overlay — цены наград")
     parser.add_argument("--hotkey", default="", help=f"горячая клавиша (по умолчанию {DEFAULT_HOTKEY})")
     parser.add_argument("--league", default="", help="лига (по умолчанию автоопределение)")
