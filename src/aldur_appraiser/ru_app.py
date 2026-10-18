@@ -147,6 +147,9 @@ class Prices:
             except Exception as exc:  # noqa: BLE001 — без сети живём на пустом рынке
                 self._note_price_error("рынок", exc)
             self.ready.set()
+        # Иконки валют. Раньше функцию скачивания никто не вызывал: в папке
+        # runtime\icons было пусто, и плашки писали «ex» текстом вместо значка.
+        self._download_currency_icons()
         # Полный проход дорог для официального trade API. Запускаем его только
         # если полного успешного прохода нет или ему уже сутки; Shift+D всегда
         # работает из локального кэша и не создаёт сетевых запросов.
@@ -178,6 +181,22 @@ class Prices:
                       f"полный проход: {self.error}", flush=True)
         self._remember_cache_mtime()
         self.ready.set()
+
+    def _download_currency_icons(self) -> None:
+        """Скачивает недостающие значки валют в runtime\\icons (один раз)."""
+        try:
+            urls = {name: path for name, path in dict(self.book.icons or {}).items()
+                    if name in ICON_CURRENCIES}
+        except Exception:  # noqa: BLE001
+            return
+        if not urls:
+            return
+        try:
+            ensure_icons(urls)
+            print(f"[{time.strftime('%H:%M:%S')}] [иконки] в кэше "
+                  f"{len(list(icon_dir().glob('*.png')))} шт", flush=True)
+        except Exception as exc:  # noqa: BLE001 — без значка цена всё равно видна
+            self._note_price_error("иконки", exc)
 
     def reload_cache_if_changed(self) -> bool:
         """Подхватывает ночное обновление с диска, не обращаясь к сети.
@@ -645,6 +664,9 @@ def capture(monitor: int = 0) -> tuple[np.ndarray, dict]:
 # --- отрисовка ---------------------------------------------------------------
 
 ICON_BASE = "https://web.poecdn.com"
+# Справочник цен отдаёт 600+ значков валют, а в плашке встречаются только эти:
+# остальные качать незачем — это сотни запросов на пустом месте.
+ICON_CURRENCIES = ("exalted", "chaos", "divine", "mirror")
 
 
 def icon_dir() -> Path:
@@ -1657,6 +1679,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
             self.pending: set[int] = set()
             self.signature = None
             self.icons: dict | None = None
+            self._icons_at = 0.0           # когда в прошлый раз пробовали читать значки
             self.bonus: set[int] = set()
             self.status = "загрузка цен…"
             self.appraiser: Appraiser | None = None
@@ -1931,8 +1954,13 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
             rates = prices.book._rates if prices.ready.is_set() else {}
-            if self.icons is None and prices.ready.is_set():
-                self.icons = load_icon_pixmaps()   # иконки валют, когда они уже скачаны
+            if prices.ready.is_set():
+                # Значки валют качаются в фоне уже после первых цен: пока файлов
+                # нет, перечитываем папку не чаще раза в секунду.
+                if self.icons is None or (not self.icons
+                                          and time.monotonic() - self._icons_at > 1.0):
+                    self._icons_at = time.monotonic()
+                    self.icons = load_icon_pixmaps()
             self.badge_rects = draw_rows(painter, self.rows, rates=rates,
                                          status=self.status if settings.show_status else "",
                                          size=(self.width(), self.height()), bonus=self.bonus,
