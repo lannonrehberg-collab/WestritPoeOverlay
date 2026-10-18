@@ -2419,11 +2419,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="автотест: построить окно настроек и выйти")
     parser.add_argument("--refresh-catalog", action="store_true",
                         help=argparse.SUPPRESS)
+    # Эти два ключа оверлей передаёт своему же EXE, когда запускает обновление
+    # цен отдельным процессом. Раньше их здесь не было: argparse считал
+    # «--warm-gems» лишним аргументом, печатал ошибку и выходил с кодом 2 —
+    # то есть полный проход цен не запускался НИКОГДА, а цены брались только
+    # из кэша. На чистой установке кэша не было, и все награды стояли с «?».
+    parser.add_argument("--warm-gems", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--market-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     if args.refresh_catalog:
         from aldur_appraiser.runeshape_catalog import main as refresh_catalog
-        return refresh_catalog(["--warm-gems"])
+        forwarded = []
+        if args.warm_gems:
+            forwarded.append("--warm-gems")
+        if args.market_only:
+            forwarded.append("--market-only")
+        return refresh_catalog(forwarded or ["--warm-gems"])
 
     settings = RuSettings().load()
     # Проверка комплекта: в собранном EXE забытые файлы словаря дают «пустые»
