@@ -20,8 +20,10 @@ for pkg in ("rapidocr_onnxruntime", "onnxruntime", "winsdk"):
 # our bundled resources (src-relative paths preserved in the bundle)
 datas += [
     ("config.toml", "."),
-    ("assets/templates", "assets/templates"),
-    ("assets/icon.png", "assets"),  # tray icon at runtime
+    ("assets/templates", "assets/templates"),   # шаблоны панели и крестика
+    ("assets/lang", "assets/lang"),             # словарь RU→EN и id обмена
+    ("assets/icon.png", "assets"),              # значок трея
+    ("assets/icon.ico", "assets"),              # значок Windows
 ]
 
 # These are imported lazily (inside functions) so PyInstaller's static analysis

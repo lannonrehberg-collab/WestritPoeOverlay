@@ -2140,6 +2140,10 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
         app.quit()
 
     tray_icon = QIcon(str(resource_path("assets/icon.ico")))
+    if tray_icon.isNull():
+        # В сборке .ico мог не попасть в комплект — тогда берём .png.
+        # Без значка в трее оверлей выглядит «не запустившимся».
+        tray_icon = QIcon(str(resource_path("assets/icon.png")))
     tray = QSystemTrayIcon()
     tray.setIcon(tray_icon)
     menu = QMenu()
@@ -2361,6 +2365,14 @@ def main(argv: list[str] | None = None) -> int:
         return refresh_catalog(["--warm-gems"])
 
     settings = RuSettings().load()
+    # Проверка комплекта: в собранном EXE забытые файлы словаря дают «пустые»
+    # строки без единой ошибки на экране — поэтому ругаемся громко в журнал.
+    for _res in ("assets/lang/ru_items.json", "assets/lang/exchange_ids.json",
+                 "assets/templates/header_runeshape_ru.png",
+                 "assets/templates/close_ru.png"):
+        if not resource_path(_res).exists():
+            print(f"ВНИМАНИЕ: в комплекте нет {_res} — распознавание не заработает",
+                  flush=True)
     # Прокси в оверлее не используется: чужая переменная окружения (например,
     # NO_PROXY со значением вида [::1]) однажды уже валила все запросы
     # (httpx.InvalidURL: Invalid port). Убираем их сразу, чтобы их не получили
