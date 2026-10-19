@@ -34,8 +34,8 @@ from aldur_appraiser.resources import resource_path
 from aldur_appraiser.ru_cli import ocr_rewards
 from aldur_appraiser.ru_settings import RuSettings, config_dir
 from aldur_appraiser.runeshape_catalog import (
-    cancel_refresh_state, market_refresh_is_due, read_refresh_state, scan_pid,
-    scan_state_is_stale,
+    MARKET_REFRESH_INTERVAL, cancel_refresh_state, market_refresh_is_due,
+    read_refresh_state, scan_pid, scan_state_is_stale,
 )
 from aldur_appraiser.game_window import (
     find_game_window, foreground_is_game, foreground_process,
@@ -110,6 +110,9 @@ class Prices:
         # остановить его: иначе дочерний exe держит файлы распакованной сборки,
         # и Windows показывает «Failed to remove temporary directory».
         self.scan_proc = None
+        # Когда рынок загружен самим оверлеем (монотонные часы): сразу после
+        # этого не нужно запускать отдельный проход «рынок устарел».
+        self.market_at = 0.0
         self.thread = threading.Thread(target=self._load, daemon=True)
         self.thread.start()
 
@@ -153,6 +156,7 @@ class Prices:
                       f"качаю рынок", flush=True)
                 started = time.time()
                 self.book.load(force=True)
+                self.market_at = time.monotonic()
                 print(f"[{time.strftime('%H:%M:%S')}] [цены] рынок загружен: "
                       f"{self.book.size} предметов за {time.time() - started:.0f} c",
                       flush=True)
@@ -1841,6 +1845,18 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
             """Есть ли панель на кадре (вынесено отдельно, чтобы это можно было тестировать)."""
             return detector is not None and detector.find_panel(frame) is not None
 
+        @staticmethod
+        def scan_active() -> bool:
+            """Идёт ли проход цен прямо сейчас — по свежему heartbeat в состоянии.
+
+            Нужно, чтобы Shift+D не запускал свои запросы по камням, пока идёт
+            общий проход: иначе два сканирования делят один лимит трейда.
+            """
+            state = read_refresh_state()
+            if state.get("status") != "scanning":
+                return False
+            return not scan_state_is_stale(state)
+
         def analyze(self) -> None:
             # Свои плашки на время снимка НЕ прячем: окно не должно мигать.
             # Их текст отсекается фильтром (drop_own_badges), а «голые» числа —
@@ -1883,7 +1899,11 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 # ложится в кэш, поэтому повторное нажатие на те же камни
                 # берёт её с диска без единого запроса.
                 fetch = list(live_extra)
-                if settings.price_gems:
+                # Пока идёт проход цен, свои запросы по камням не запускаем:
+                # иначе получается два сканирования одновременно, и оба ждут
+                # один и тот же лимит трейда. Цены, которые проход получит,
+                # подхватит обычное обновление кэша.
+                if settings.price_gems and not self.scan_active():
                     # Только те камни, которые ещё не спрашивали недавно: иначе
                     # каждое перечитывание панели (прокрутка, смена списка)
                     # отправляло бы в трейд один и тот же поиск заново.
@@ -2365,6 +2385,14 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
         сам — даже раз в сутки: только по нажатию в меню трея.
         """
         if scan_is_running():
+            return
+        if not prices.ready.is_set():
+            # Первая загрузка рынка ещё идёт: она сама обновит цены, отдельный
+            # проход сейчас только помешал бы.
+            return
+        if time.monotonic() - getattr(prices, "market_at", 0.0) < MARKET_REFRESH_INTERVAL:
+            # Рынок только что загружен самим оверлеем: файл ещё не успел
+            # записаться, и проверка «рынок устарел» дала бы ложное «пора».
             return
         if market_refresh_is_due():
             start_scan(["--market-only"], why="рынок старше 15 минут", quiet=True)

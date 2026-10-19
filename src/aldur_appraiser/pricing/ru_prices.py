@@ -605,11 +605,48 @@ class PriceBook:
         """Общий файл рынка: его читают инструменты и проверка свежести рынка."""
         return price_cache_path("")
 
+    def _merge_gems_from_disk(self) -> None:
+        """Подтягивает цены камней из файла перед сохранением.
+
+        Один и тот же `prices.json` пишут два процесса: оверлей (цена по Shift+D)
+        и отдельный проход цен. Без этого слияния более поздняя запись одного
+        процесса стирала цены, только что полученные другим.
+        """
+        seen: set[Path] = set()
+        for path in (self._cache_file, self._shared_cache_file):
+            if path in seen:
+                continue
+            seen.add(path)
+            data = self._read_cache_json(path)
+            if not data or data.get("gem_cache_version") != 3:
+                continue
+            for key, value in (data.get("gems") or {}).items():
+                try:
+                    price = float(value[0])
+                    stamp = float(value[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                old = self._gems.get(key)
+                if price > 0 and (old is None or stamp > old[1]):
+                    self._gems[key] = (price, stamp)
+            for key, value in (data.get("gem_source") or {}).items():
+                try:
+                    stamp = float(value[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                old = self._gem_source.get(key)
+                if old is None or stamp > old[1]:
+                    self._gem_source[key] = (str(value[0]), stamp)
+
     def _save_cache(self) -> None:
         # Пустота не должна затирать рабочие цены: иначе один неудачный запуск
         # (например, без сети) обнуляет кэш для всех следующих.
         if not self._book and not self._scout:
             return
+        try:
+            self._merge_gems_from_disk()
+        except Exception:  # noqa: BLE001 — слияние не должно мешать записи
+            pass
         try:
             payload = json.dumps({
                 "league": self.league,
@@ -689,11 +726,26 @@ class PriceBook:
         # был «не ниже указанного», а в выборку попадали торгуемые (~price) лоты.
         # Такие оценки нельзя смешивать с точными fixed-buyout ценами.
         if data.get("gem_cache_version") == 3:
-            self._gems = {k: (float(v[0]), float(v[1]))
-                          for k, v in data.get("gems", {}).items()
-                          if float(v[0]) > 0}
-            self._gem_source = {k: (str(v[0]), float(v[1]))
-                                for k, v in data.get("gem_source", {}).items()}
+            # Не затираем то, что уже есть в памяти: тот же файл пишет и полный
+            # проход цен, и оверлей. Иначе цена, полученная по Shift+D, исчезала
+            # при первом же сохранении из другого процесса.
+            for key, value in (data.get("gems") or {}).items():
+                try:
+                    price = float(value[0])
+                    stamp = float(value[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                old = self._gems.get(key)
+                if price > 0 and (old is None or stamp > old[1]):
+                    self._gems[key] = (price, stamp)
+            for key, value in (data.get("gem_source") or {}).items():
+                try:
+                    stamp = float(value[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                old = self._gem_source.get(key)
+                if old is None or stamp > old[1]:
+                    self._gem_source[key] = (str(value[0]), stamp)
         else:
             self._gems = {}
             self._gem_source = {}
