@@ -34,7 +34,7 @@ from aldur_appraiser.resources import resource_path
 from aldur_appraiser.ru_cli import ocr_rewards
 from aldur_appraiser.ru_settings import RuSettings, config_dir
 from aldur_appraiser.runeshape_catalog import (
-    market_refresh_is_due, read_refresh_state, refresh_is_due, scan_state_is_stale,
+    market_refresh_is_due, read_refresh_state, scan_state_is_stale,
 )
 from aldur_appraiser.game_window import (
     find_game_window, foreground_is_game, foreground_process,
@@ -167,10 +167,12 @@ class Prices:
         # Полный проход (включая fixed-buyout лоты камней/предметов) идёт раз
         # в сутки. Рынок материалов обновляем отдельно и чаще: это один общий
         # снимок, без сотен запросов к trade API.
+        # Полный проход по камням сам не запускается НИКОГДА: он дорог для
+        # trade API и делается только вручную — пункт «Сканировать все камни»
+        # в меню трея. Здесь обновляется только рынок материалов: это один
+        # общий снимок, без сотен запросов.
         refresh_args: list[str] | None = None
-        if refresh_is_due():
-            refresh_args = ["--warm-gems"]
-        elif market_refresh_is_due():
+        if market_refresh_is_due():
             refresh_args = ["--market-only"]
         if refresh_args is not None:
             try:
@@ -2306,12 +2308,14 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
         return True
 
     def auto_refresh_tick() -> None:
-        """Сам решает, пора ли обновить цены: время считается по файлам проекта."""
+        """Сам решает, пора ли обновить цены: время считается по файлам проекта.
+
+        Обновляется только рынок. Полный проход по камням никогда не стартует
+        сам — даже раз в сутки: только по нажатию в меню трея.
+        """
         if scan_is_running():
             return
-        if refresh_is_due():
-            start_scan(["--warm-gems"], why="полному проходу больше суток", quiet=True)
-        elif market_refresh_is_due():
+        if market_refresh_is_due():
             start_scan(["--market-only"], why="рынок старше 15 минут", quiet=True)
 
     menu = QMenu()
