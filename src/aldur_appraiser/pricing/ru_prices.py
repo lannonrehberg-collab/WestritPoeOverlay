@@ -1085,6 +1085,11 @@ class PriceBook:
                    **kw) -> httpx.Response | None:
         """Запрос к трейду с соблюдением лимитов. None — обращаться сейчас нельзя."""
         background = self._background_refresh
+        # Действие человека первоочередное: проход цен проверяет паузу перед
+        # каждым запросом, а не только между наградами.
+        pause_hook = getattr(self, "_pause_callback", None)
+        if pause_hook is not None:
+            pause_hook()
         if not background and self._limiter.blocked_for(kind) > MAX_INLINE_WAIT:
             return None
         resp = None

@@ -329,6 +329,50 @@ def _release_lock() -> None:
 SCAN_STALE_SECONDS = 120.0
 
 
+def pause_file_path() -> Path:
+    """Файл паузы прохода: внутри время, до которого запросы не отправляются."""
+    return config_dir() / "runeshape_pause.until"
+
+
+def request_pause(seconds: float = 120.0) -> None:
+    """Ставит проход на паузу: нажатие человека важнее фоновой работы.
+
+    Вызывается оверлеем перед догрузкой цен по Shift+D, чтобы проход не занимал
+    лимит трейда в этот момент.
+    """
+    try:
+        pause_file_path().write_text(str(time.time() + max(1.0, seconds)),
+                                     encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_pause() -> None:
+    """Снимает паузу прохода (действие человека закончилось)."""
+    try:
+        pause_file_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def pause_until() -> float:
+    """До какого времени проход должен молчать. 0 — паузы нет."""
+    try:
+        return float(pause_file_path().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
+def wait_while_paused(*, limit: float = 600.0) -> None:
+    """Ждёт, пока пауза не кончится. Пауза сама истекает по времени."""
+    started = time.monotonic()
+    while time.monotonic() - started < limit:
+        until = pause_until()
+        if until <= time.time():
+            return
+        time.sleep(0.5)
+
+
 def scan_lock_path() -> Path:
     """Файл замка прохода цен: внутри лежит PID процесса-сканера."""
     return _lock_path()
@@ -571,6 +615,9 @@ def build_catalog(*, warm_gems: bool, started_at: float | None = None,
                       total=int(state.get("total", 0)))
 
     book._progress_callback = report_api_wait
+    # Действие человека (Shift+D) первоочередное: перед каждым запросом проход
+    # проверяет файл паузы и молчит, пока оверлей не закончит свой поиск.
+    book._pause_callback = wait_while_paused
     book.use_cache()
     book.load(force=True, detect_league=not bool(selected_league))
     base_league = book.league
@@ -590,6 +637,9 @@ def build_catalog(*, warm_gems: bool, started_at: float | None = None,
     currency_exchange_requests = 0
     request_errors: list[str] = []
     for index, (en_name, quantity) in enumerate(rewards, start=1):
+        # Нажатие Shift+D важнее прохода: пока оверлей догружает цены по
+        # действию человека, фон не отправляет запросы и не занимает лимит.
+        wait_while_paused()
         _set_progress(20 + int((index - 1) * 79 / len(rewards)),
                       "проверка награды", completed=index - 1,
                       total=len(rewards), current_reward=en_name)

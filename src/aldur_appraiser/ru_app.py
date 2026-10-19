@@ -34,8 +34,9 @@ from aldur_appraiser.resources import resource_path
 from aldur_appraiser.ru_cli import ocr_rewards
 from aldur_appraiser.ru_settings import RuSettings, config_dir
 from aldur_appraiser.runeshape_catalog import (
-    MARKET_REFRESH_INTERVAL, cancel_refresh_state, market_refresh_is_due,
-    read_refresh_state, scan_pid, scan_state_is_stale,
+    MARKET_REFRESH_INTERVAL, cancel_refresh_state, clear_pause,
+    market_refresh_is_due, read_refresh_state, request_pause, scan_pid,
+    scan_state_is_stale,
 )
 from aldur_appraiser.game_window import (
     find_game_window, foreground_is_game, foreground_process,
@@ -1899,11 +1900,9 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 # ложится в кэш, поэтому повторное нажатие на те же камни
                 # берёт её с диска без единого запроса.
                 fetch = list(live_extra)
-                # Пока идёт проход цен, свои запросы по камням не запускаем:
-                # иначе получается два сканирования одновременно, и оба ждут
-                # один и тот же лимит трейда. Цены, которые проход получит,
-                # подхватит обычное обновление кэша.
-                if settings.price_gems and not self.scan_active():
+                # Действие человека первоочередное: если идёт фоновый проход,
+                # ставим его на паузу и догружаем цены сами.
+                if settings.price_gems:
                     # Только те камни, которые ещё не спрашивали недавно: иначе
                     # каждое перечитывание панели (прокрутка, смена списка)
                     # отправляло бы в трейд один и тот же поиск заново.
@@ -1914,6 +1913,9 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                                   Appraiser.gem_key(self.rows[index][0]), 0.0)]
                 if fetch and prices.ready.is_set():
                     self.pending = set(fetch)
+                    if self.scan_active():
+                        # Фоновый проход замолкает, пока не закончим свой поиск.
+                        request_pause(90.0)
                     self.start_gem_worker(fetch, self.generation)
                 else:
                     self.pending = set()
@@ -2013,6 +2015,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
 
         def finish_prices(self, generation: int) -> None:
             """Догрузка цен закончилась: убираем «…», оставляя честные «?»."""
+            clear_pause()   # действие человека закончилось — фон может работать
             if generation != self.generation:
                 return
             if self.pending:
@@ -2298,6 +2301,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
 
     def start_scan(args: list[str], *, why: str, quiet: bool = False) -> bool:
         """Запускает проход цен отдельным процессом и пишет об этом в журнал."""
+        clear_pause()   # своя команда человека отменяет прежнюю паузу
         if scan_is_running() or time.monotonic() - spawn_at["at"] < 120:
             if not quiet:
                 tray.showMessage("PoE2 RU Overlay", "Сканирование цен уже идёт.",
@@ -2367,6 +2371,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
             stopped = True
         prices.scan_proc = None
         spawn_at["at"] = 0.0
+        clear_pause()
         cancel_refresh_state("остановлено вручную")
         if stopped:
             print(f"[{time.strftime('%H:%M:%S')}] [цены] сканирование остановлено "
@@ -2495,6 +2500,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
             kill_process_tree(proc.pid)
         if leftover and leftover != os.getpid():
             kill_process_tree(leftover)
+        clear_pause()
         cancel_refresh_state("оверлей закрыт")
         print(f"[{time.strftime('%H:%M:%S')}] [цены] сканер остановлен "
               f"перед выходом", flush=True)
