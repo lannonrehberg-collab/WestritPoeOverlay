@@ -65,6 +65,13 @@ SCROLL_THRESHOLD = 5.0
 UI_WATCH_INTERVAL_MS = 300
 SCROLL_CHECK_EVERY_TICKS = 2
 
+# Сколько ждать перед повтором поиска цены камня. Панель перечитывается каждые
+# несколько секунд (прокрутка, смена списка), и без этой паузы один и тот же
+# камень уходил в трейд заново на каждом перечитывании. После ответа 429 пауза
+# длиннее: лимит трейда общий на IP, и долбить его бессмысленно.
+GEM_RETRY_COOLDOWN = 180.0
+GEM_LIMIT_COOLDOWN = 600.0
+
 # Цвета интерфейса
 C_BG = (0, 0, 0, 170)
 C_BEST = (255, 205, 90, 255)
@@ -253,6 +260,13 @@ class Prices:
             return self.book.cached_gem_price(reward.en_name, reward.gem_level)
         except Exception:  # noqa: BLE001
             return None
+
+    def last_trade_error(self) -> str:
+        """Последняя ошибка трейда: по ней видно, упёрлись ли мы в лимит (429)."""
+        try:
+            return self.book.last_trade_error
+        except Exception:  # noqa: BLE001
+            return ""
 
     def estimate_label(self, reward: Reward) -> str:
         """Подпись для награды с заведомо неизвестным точным вариантом."""
@@ -447,6 +461,11 @@ class Appraiser:
         """
         return [i for i, (reward, value, _, _n) in enumerate(rows)
                 if reward.kind == "gem" and reward.en_name and value is None]
+
+    @staticmethod
+    def gem_key(reward) -> tuple[str, int]:
+        """Ключ камня для паузы перед повтором: название и уровень."""
+        return (reward.en_name or "", reward.gem_level or 0)
 
     @staticmethod
     def bulk_indices(rows, book) -> list[int]:
@@ -1714,6 +1733,10 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 self.crest = None
             self.busy = False
             self.gem_busy = False
+            # Когда снова можно спрашивать цену камня: неудачный запрос не
+            # повторяется на каждом перечитывании панели, иначе трейд получает
+            # один и тот же поиск десятки раз подряд.
+            self.gem_retry_at: dict[tuple[str, int], float] = {}
             self.generation = 0
             self.triggered.connect(self.on_hotkey)
             self.gemPriced.connect(self.apply_gem_price)
@@ -1858,7 +1881,14 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 # берёт её с диска без единого запроса.
                 fetch = list(live_extra)
                 if settings.price_gems:
-                    fetch += [index for index in pending if index not in set(fetch)]
+                    # Только те камни, которые ещё не спрашивали недавно: иначе
+                    # каждое перечитывание панели (прокрутка, смена списка)
+                    # отправляло бы в трейд один и тот же поиск заново.
+                    moment = time.monotonic()
+                    fetch += [index for index in pending
+                              if index not in set(fetch)
+                              and moment >= self.gem_retry_at.get(
+                                  self.gem_key(self.rows[index][0]), 0.0)]
                 if fetch and prices.ready.is_set():
                     self.pending = set(fetch)
                     self.start_gem_worker(fetch, self.generation)
@@ -1926,12 +1956,30 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
 
             def work() -> None:
                 try:
-                    for index in indices:
+                    for position, index in enumerate(indices):
                         reward = snapshot[index][0]
+                        key = self.gem_key(reward)
                         value = prices.price(reward)
                         if value:
+                            # Цена уже записана в кэш самим price(): следующее
+                            # нажатие берёт её с диска без запроса.
+                            self.gem_retry_at.pop(key, None)
                             value *= max(1, reward.qty)   # стоимость всего лота
                             self.gemPriced.emit(generation, index, float(value), "")
+                            continue
+                        # Поиск не удался — запоминаем, когда можно повторить,
+                        # чтобы панель не отправляла тот же поиск заново.
+                        error = prices.last_trade_error()
+                        limit_hit = "429" in error
+                        self.gem_retry_at[key] = time.monotonic() + (
+                            GEM_LIMIT_COOLDOWN if limit_hit else GEM_RETRY_COOLDOWN)
+                        if limit_hit:
+                            # Лимит трейда общий на IP: остальные камни этой
+                            # панели сейчас тоже не ответят — не тратим запросы.
+                            for rest in indices[position + 1:]:
+                                self.gem_retry_at[self.gem_key(snapshot[rest][0])] = \
+                                    self.gem_retry_at[key]
+                            break
                 finally:
                     self.gem_busy = False
                     # Цены догружены: если что-то получить не удалось, «…» больше

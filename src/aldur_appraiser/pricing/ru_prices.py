@@ -1327,6 +1327,15 @@ class PriceBook:
         with self._lock:
             return self._gem_source.get(f"{en_name}|{level or 0}")
 
+    @property
+    def last_trade_error(self) -> str:
+        """Последняя ошибка торгового сайта (например «поиск вернул HTTP 429»).
+
+        Оверлею нужна, чтобы отличить «цены нет» от «лимит запросов исчерпан»
+        и не повторять поиск, пока лимит не отпустит.
+        """
+        return self._last_trade_error or ""
+
     def cached_gem_price(self, en_name: str, level: int | None) -> float | None:
         """Свежая сохранённая цена камня без сетевого запроса.
 
