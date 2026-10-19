@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aldur-appraiser"
-version = "0.4.8"
+version = "0.4.9"
 description = "Passive read-only PoE2 reward overlay with Russian client support (fork of Aldur Appraiser)."
 readme = "README.md"
 requires-python = ">=3.11"

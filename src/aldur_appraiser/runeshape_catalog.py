@@ -329,6 +329,43 @@ def _release_lock() -> None:
 SCAN_STALE_SECONDS = 120.0
 
 
+def scan_lock_path() -> Path:
+    """Файл замка прохода цен: внутри лежит PID процесса-сканера."""
+    return _lock_path()
+
+
+def scan_pid() -> int:
+    """PID живого прохода цен. 0 — прохода нет (замка нет или владелец умер)."""
+    lock = _lock_path()
+    if not lock.exists() or not _lock_owner_is_alive(lock):
+        return 0
+    try:
+        return int(lock.read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def cancel_refresh_state(reason: str = "остановлено вручную") -> None:
+    """Помечает проход отменённым и снимает замок.
+
+    Нужно кнопке «Остановить сканирование»: после принудительной остановки
+    файл состояния иначе остаётся в статусе scanning, и следующий запуск
+    считает, что проход ещё идёт.
+    """
+    state = _read_refresh_state()
+    if not state:
+        return
+    state["status"] = "cancelled"
+    state["phase"] = reason
+    state["last_heartbeat_at"] = time.time()
+    state["completed"] = state.get("completed", 0)
+    _save_refresh_state(state)
+    try:
+        _lock_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def scan_state_is_stale(state: dict, *, timeout: float = SCAN_STALE_SECONDS) -> bool:
     """True, если запись «сканирование» осталась от умершего процесса.
 

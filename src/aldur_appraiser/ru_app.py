@@ -34,7 +34,8 @@ from aldur_appraiser.resources import resource_path
 from aldur_appraiser.ru_cli import ocr_rewards
 from aldur_appraiser.ru_settings import RuSettings, config_dir
 from aldur_appraiser.runeshape_catalog import (
-    market_refresh_is_due, read_refresh_state, scan_state_is_stale,
+    cancel_refresh_state, market_refresh_is_due, read_refresh_state, scan_pid,
+    scan_state_is_stale,
 )
 from aldur_appraiser.game_window import (
     find_game_window, foreground_is_game, foreground_process,
@@ -1890,7 +1891,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                     fetch += [index for index in pending
                               if index not in set(fetch)
                               and moment >= self.gem_retry_at.get(
-                                  self.gem_key(self.rows[index][0]), 0.0)]
+                                  Appraiser.gem_key(self.rows[index][0]), 0.0)]
                 if fetch and prices.ready.is_set():
                     self.pending = set(fetch)
                     self.start_gem_worker(fetch, self.generation)
@@ -1960,7 +1961,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 try:
                     for position, index in enumerate(indices):
                         reward = snapshot[index][0]
-                        key = self.gem_key(reward)
+                        key = Appraiser.gem_key(reward)
                         value = prices.price(reward)
                         if value:
                             # Цена уже записана в кэш самим price(): следующее
@@ -1979,7 +1980,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                             # Лимит трейда общий на IP: остальные камни этой
                             # панели сейчас тоже не ответят — не тратим запросы.
                             for rest in indices[position + 1:]:
-                                self.gem_retry_at[self.gem_key(snapshot[rest][0])] = \
+                                self.gem_retry_at[Appraiser.gem_key(snapshot[rest][0])] = \
                                     self.gem_retry_at[key]
                             break
                 finally:
@@ -2307,6 +2308,56 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                              f"Сканирование цен запущено: {why}.", QIcon(), 5000)
         return True
 
+    def kill_process_tree(pid: int) -> None:
+        """Гасит процесс вместе с потомками.
+
+        Сборка onefile — это загрузчик, который запускает копию себя: если убить
+        только родителя, сам сканер продолжает работать и «доводит» проход
+        после закрытия оверлея. Поэтому завершаем всё дерево.
+        """
+        if pid <= 0:
+            return
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                capture_output=True, check=False)
+        except Exception:  # noqa: BLE001 — остановка не должна ломать выход
+            pass
+
+    def stop_scan(*, quiet: bool = False) -> bool:
+        """Останавливает проход цен в любой момент.
+
+        Гасит и свой процесс, и оставшийся от прошлого запуска (он находится по
+        файлу замка). После остановки состояние помечается отменённым, иначе
+        следующий запуск считал бы, что сканирование всё ещё идёт.
+        """
+        stopped = False
+        proc = getattr(prices, "scan_proc", None)
+        if proc is not None and proc.poll() is None:
+            kill_process_tree(proc.pid)
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
+            stopped = True
+        leftover = scan_pid()
+        if leftover and leftover != os.getpid():
+            kill_process_tree(leftover)
+            stopped = True
+        prices.scan_proc = None
+        spawn_at["at"] = 0.0
+        cancel_refresh_state("остановлено вручную")
+        if stopped:
+            print(f"[{time.strftime('%H:%M:%S')}] [цены] сканирование остановлено "
+                  f"вручную", flush=True)
+        if not quiet:
+            tray.showMessage(
+                "PoE2 RU Overlay",
+                "Сканирование остановлено." if stopped else "Сканирование не идёт.",
+                QIcon(), 4000)
+        return stopped
+
     def auto_refresh_tick() -> None:
         """Сам решает, пора ли обновить цены: время считается по файлам проекта.
 
@@ -2328,6 +2379,10 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
     act_scan_gems = QAction("Сканировать все камни", menu)
     act_scan_gems.triggered.connect(
         lambda: start_scan(["--warm-gems"], why="запущено вручную из меню"))
+    # Отмена прохода в любой момент: полный проход идёт 10–20 минут и ждёт
+    # лимита трейда, поэтому человек должен иметь возможность его прервать.
+    act_stop_scan = QAction("Остановить сканирование", menu)
+    act_stop_scan.triggered.connect(lambda: stop_scan())
     act_settings = QAction("Настройки…", menu)
 
     def open_settings_from_menu() -> None:
@@ -2358,6 +2413,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
     menu.addAction(act_show)
     menu.addAction(act_hide)
     menu.addAction(act_scan_gems)
+    menu.addAction(act_stop_scan)
     menu.addAction(act_settings)
     menu.addAction(act_hide_auto)
     menu.addAction(act_log)
@@ -2378,6 +2434,12 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
     refresh_watch.timeout.connect(auto_refresh_tick)
     refresh_watch.start()
     app._aldur_refresh_watch = refresh_watch
+    # Проход, оставшийся от прошлого запуска, не продолжаем: он тратил лимит
+    # трейда в фоне, пока оверлей только открывался.
+    if scan_pid():
+        stop_scan(quiet=True)
+        print(f"[{time.strftime('%H:%M:%S')}] [цены] оставшийся проход остановлен "
+              f"при запуске", flush=True)
     QTimer.singleShot(15_000, auto_refresh_tick)
     print(f"[tray] available={QSystemTrayIcon.isSystemTrayAvailable()} "
           f"icon_null={tray_icon.isNull()} visible={tray.isVisible()}", flush=True)
@@ -2393,18 +2455,21 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
 
         Иначе дочерний процесс продолжает работать с файлами распакованной
         сборки, и Windows не даёт удалить её временную папку — при выходе
-        выскакивало «Failed to remove temporary directory».
+        выскакивало «Failed to remove temporary directory». Гасим всё дерево:
+        в onefile-сборке сканер — это отдельный процесс-потомок, и завершение
+        одного загрузчика оставляло проход работать.
         """
         proc = getattr(prices, "scan_proc", None)
-        if proc is None or proc.poll() is not None:
+        leftover = scan_pid()
+        if (proc is None or proc.poll() is not None) and not leftover:
             return
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-            print(f"[{time.strftime('%H:%M:%S')}] [цены] сканер остановлен "
-                  f"перед выходом", flush=True)
-        except Exception:  # noqa: BLE001 — выход не должен падать из-за этого
-            pass
+        if proc is not None and proc.poll() is None:
+            kill_process_tree(proc.pid)
+        if leftover and leftover != os.getpid():
+            kill_process_tree(leftover)
+        cancel_refresh_state("оверлей закрыт")
+        print(f"[{time.strftime('%H:%M:%S')}] [цены] сканер остановлен "
+              f"перед выходом", flush=True)
 
     app.aboutToQuit.connect(stop_scan_on_exit)
 
