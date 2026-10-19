@@ -596,6 +596,14 @@ def build_catalog(*, warm_gems: bool, started_at: float | None = None,
         rewards, gem_names = fetch_catalog(client)
     _set_progress(5, "получение рыночных данных", total=len(rewards))
 
+    # Порядок проверки: сначала всё, что берётся из таблиц (poe.ninja, poe2scout,
+    # официальный обменник), и только в самом конце — камни по лотам трейда.
+    # Иначе лимит торгового сайта сгорал на камнях, а обычные награды, которые
+    # стоят один запрос на всё, ждали в конце.
+    if warm_gems and gem_names:
+        rewards = ([row for row in rewards if row[0] not in gem_names]
+                   + [row for row in rewards if row[0] in gem_names])
+
     # Настройка лиги общая с оверлеем. Пусто = «Авто», то есть определить
     # текущую активную лигу только для этого запуска.
     selected_league = RuSettings().load().league.strip()

@@ -1908,18 +1908,20 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 # камни — с трейд-сайта по одной штуке. Удачная цена сразу
                 # ложится в кэш, поэтому повторное нажатие на те же камни
                 # берёт её с диска без единого запроса.
-                fetch = list(live_extra)
-                # Действие человека первоочередное: если идёт фоновый проход,
-                # ставим его на паузу и догружаем цены сами.
-                if settings.price_gems:
-                    # Только те камни, которые ещё не спрашивали недавно: иначе
-                    # каждое перечитывание панели (прокрутка, смена списка)
-                    # отправляло бы в трейд один и тот же поиск заново.
-                    moment = time.monotonic()
-                    fetch += [index for index in pending
-                              if index not in set(fetch)
-                              and moment >= self.gem_retry_at.get(
-                                  Appraiser.gem_key(self.rows[index][0]), 0.0)]
+                # Порядок — ровно как на экране, сверху вниз: человек видит,
+                # что сначала считается верхняя строка, потом следующая.
+                moment = time.monotonic()
+                bulk = set(live_extra)
+                gems = set(pending) if settings.price_gems else set()
+                fetch: list[int] = []
+                for index in range(len(self.rows)):
+                    if index in bulk:
+                        fetch.append(index)
+                    elif index in gems and moment >= self.gem_retry_at.get(
+                            Appraiser.gem_key(self.rows[index][0]), 0.0):
+                        # Камни, которые спрашивали недавно, второй раз не идут:
+                        # иначе панель отправляла бы тот же поиск заново.
+                        fetch.append(index)
                 if fetch and prices.ready.is_set():
                     self.pending = set(fetch)
                     if self.scan_active():
