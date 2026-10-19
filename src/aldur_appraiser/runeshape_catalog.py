@@ -105,6 +105,11 @@ def _read_refresh_state() -> dict:
         return {}
 
 
+def read_refresh_state() -> dict:
+    """Публичное чтение состояния прохода (для оверлея, без сети и замков)."""
+    return _read_refresh_state()
+
+
 def _write_text_atomically(path: Path, payload: str) -> None:
     """Пишет файл через временный: обрыв записи не оставит обрезанный JSON.
 

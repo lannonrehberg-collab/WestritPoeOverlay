@@ -34,7 +34,7 @@ from aldur_appraiser.resources import resource_path
 from aldur_appraiser.ru_cli import ocr_rewards
 from aldur_appraiser.ru_settings import RuSettings, config_dir
 from aldur_appraiser.runeshape_catalog import (
-    market_refresh_is_due, refresh_is_due, scan_state_is_stale,
+    market_refresh_is_due, read_refresh_state, refresh_is_due, scan_state_is_stale,
 )
 from aldur_appraiser.game_window import (
     find_game_window, foreground_is_game, foreground_process,
@@ -98,6 +98,10 @@ class Prices:
         self.error = ""
         self._cache_mtime_ns = 0
         self._price_errors: set[tuple[str, str]] = set()
+        # Запущенный нами процесс обновления цен. Нужен, чтобы при выходе
+        # остановить его: иначе дочерний exe держит файлы распакованной сборки,
+        # и Windows показывает «Failed to remove temporary directory».
+        self.scan_proc = None
         self.thread = threading.Thread(target=self._load, daemon=True)
         self.thread.start()
 
@@ -171,7 +175,8 @@ class Prices:
                     command = [sys.executable, "-u", "-m",
                                "aldur_appraiser.runeshape_catalog", *refresh_args]
                     root = Path(__file__).resolve().parents[2]
-                subprocess.Popen(command, cwd=str(root), creationflags=flags, close_fds=True)
+                self.scan_proc = subprocess.Popen(
+                    command, cwd=str(root), creationflags=flags, close_fds=True)
                 print(f"[{time.strftime('%H:%M:%S')}] [цены] запущен полный проход "
                       f"цен: {' '.join(refresh_args)}", flush=True)
             except Exception as exc:  # noqa: BLE001 — приложение должно жить и без сети
@@ -436,8 +441,9 @@ class Appraiser:
     def gem_indices(rows) -> list[int]:
         """Камни без цены в локальном снимке.
 
-        Их не запрашиваем от Shift+D: полный скан заполнит кэш по расписанию,
-        а пока плашка честно покажет «?». 
+        Их догружает фоновый поток по одной штуке: цена сразу попадает в кэш,
+        поэтому следующее нажатие на ту же панель отвечает мгновенно.
+        Если догрузка в настройках выключена — плашка честно показывает «?».
         """
         return [i for i, (reward, value, _, _n) in enumerate(rows)
                 if reward.kind == "gem" and reward.en_name and value is None]
@@ -1846,13 +1852,16 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 if not prices.ready.is_set():
                     self.status += " (цены ещё грузятся)"
                 self.setGeometry(mon["left"], mon["top"], mon["width"], mon["height"])
-                if live_extra and prices.ready.is_set() and settings.price_gems:
-                    # Камни не догружаем от Shift+D: это была причина очереди
-                    # «…» и лишних запросов. Их обновляет только полный скан.
-                    # Для пачечных предметов сохраняем фоновую проверку
-                    # официального обменника.
-                    self.pending = set(live_extra)
-                    self.start_gem_worker(live_extra, self.generation)
+                # Живые цены догружаем фоном: пачечные предметы — из обменника,
+                # камни — с трейд-сайта по одной штуке. Удачная цена сразу
+                # ложится в кэш, поэтому повторное нажатие на те же камни
+                # берёт её с диска без единого запроса.
+                fetch = list(live_extra)
+                if settings.price_gems:
+                    fetch += [index for index in pending if index not in set(fetch)]
+                if fetch and prices.ready.is_set():
+                    self.pending = set(fetch)
+                    self.start_gem_worker(fetch, self.generation)
                 else:
                     self.pending = set()
                 priced = sum(1 for _, v, _b, _n in self.rows if v)
@@ -2203,11 +2212,70 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
         tray_icon = QIcon(str(resource_path("assets/icon.png")))
     tray = QSystemTrayIcon()
     tray.setIcon(tray_icon)
+
+    # ── обновление цен ──────────────────────────────────────────────────────
+    # Всё живёт внутри проекта: сканер — это тот же exe (или тот же модуль из
+    # src), никаких задач в планировщике и записей в системе.
+    spawn_at = {"at": 0.0}
+
+    def scan_is_running() -> bool:
+        """Идёт ли проход цен прямо сейчас — по свежему heartbeat в состоянии."""
+        state = read_refresh_state()
+        if state.get("status") != "scanning":
+            return False
+        return not scan_state_is_stale(state)
+
+    def start_scan(args: list[str], *, why: str, quiet: bool = False) -> bool:
+        """Запускает проход цен отдельным процессом и пишет об этом в журнал."""
+        if scan_is_running() or time.monotonic() - spawn_at["at"] < 120:
+            if not quiet:
+                tray.showMessage("PoE2 RU Overlay", "Сканирование цен уже идёт.",
+                                 QIcon(), 4000)
+            return False
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            if getattr(sys, "frozen", False):
+                command = [sys.executable, "--refresh-catalog", *args]
+                root = Path(sys.executable).resolve().parent
+            else:
+                command = [sys.executable, "-u", "-m",
+                           "aldur_appraiser.runeshape_catalog", *args]
+                root = Path(__file__).resolve().parents[2]
+            prices.scan_proc = subprocess.Popen(
+                command, cwd=str(root), creationflags=flags, close_fds=True)
+        except Exception as exc:  # noqa: BLE001 — приложение должно жить и без сети
+            print(f"[{time.strftime('%H:%M:%S')}] [цены] не смог запустить проход "
+                  f"({' '.join(args)}): {type(exc).__name__}: {exc}", flush=True)
+            tray.showMessage("PoE2 RU Overlay",
+                             f"Не удалось запустить сканирование: {exc}", QIcon(), 6000)
+            return False
+        spawn_at["at"] = time.monotonic()
+        print(f"[{time.strftime('%H:%M:%S')}] [цены] запущен проход цен "
+              f"({' '.join(args)}) — {why}", flush=True)
+        if not quiet:
+            tray.showMessage("PoE2 RU Overlay",
+                             f"Сканирование цен запущено: {why}.", QIcon(), 5000)
+        return True
+
+    def auto_refresh_tick() -> None:
+        """Сам решает, пора ли обновить цены: время считается по файлам проекта."""
+        if scan_is_running():
+            return
+        if refresh_is_due():
+            start_scan(["--warm-gems"], why="полному проходу больше суток", quiet=True)
+        elif market_refresh_is_due():
+            start_scan(["--market-only"], why="рынок старше 15 минут", quiet=True)
+
     menu = QMenu()
     act_show = QAction("Показать / обновить цены", menu)
     act_show.triggered.connect(overlay.toggle)
     act_hide = QAction("Скрыть цены", menu)
     act_hide.triggered.connect(overlay.hide_prices)
+    # Ручной полный проход только по камням: они считаются по одному запросу на
+    # камень, и человек сам решает, когда тратить на это время.
+    act_scan_gems = QAction("Сканировать все камни", menu)
+    act_scan_gems.triggered.connect(
+        lambda: start_scan(["--warm-gems"], why="запущено вручную из меню"))
     act_settings = QAction("Настройки…", menu)
 
     def open_settings_from_menu() -> None:
@@ -2237,6 +2305,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
     act_quit.triggered.connect(app.quit)
     menu.addAction(act_show)
     menu.addAction(act_hide)
+    menu.addAction(act_scan_gems)
     menu.addAction(act_settings)
     menu.addAction(act_hide_auto)
     menu.addAction(act_log)
@@ -2249,6 +2318,15 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
     # до завершения приложения, даже если внутренности функции будут очищены.
     app._aldur_tray = tray
     app._aldur_tray_icon = tray_icon
+    # Проверка «пора обновить» — раз в минуту и только по файлам проекта, без
+    # сети. Раньше она срабатывала лишь при запуске, поэтому оверлей, висевший
+    # сутками, показывал просроченные цены камней («?» при живых данных).
+    refresh_watch = QTimer(app)
+    refresh_watch.setInterval(60_000)
+    refresh_watch.timeout.connect(auto_refresh_tick)
+    refresh_watch.start()
+    app._aldur_refresh_watch = refresh_watch
+    QTimer.singleShot(15_000, auto_refresh_tick)
     print(f"[tray] available={QSystemTrayIcon.isSystemTrayAvailable()} "
           f"icon_null={tray_icon.isNull()} visible={tray.isVisible()}", flush=True)
 
@@ -2257,6 +2335,26 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
     # отвечает на нажатия.
     app.aboutToQuit.connect(tray.hide)
     app.aboutToQuit.connect(forget_instance)
+
+    def stop_scan_on_exit() -> None:
+        """Гасит запущенный нами проход цен перед выходом.
+
+        Иначе дочерний процесс продолжает работать с файлами распакованной
+        сборки, и Windows не даёт удалить её временную папку — при выходе
+        выскакивало «Failed to remove temporary directory».
+        """
+        proc = getattr(prices, "scan_proc", None)
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+            print(f"[{time.strftime('%H:%M:%S')}] [цены] сканер остановлен "
+                  f"перед выходом", flush=True)
+        except Exception:  # noqa: BLE001 — выход не должен падать из-за этого
+            pass
+
+    app.aboutToQuit.connect(stop_scan_on_exit)
 
     def retry_hotkey() -> None:
         """Занимает горячую клавишу позже, если она была занята другой копией.
