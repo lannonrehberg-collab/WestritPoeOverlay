@@ -114,6 +114,7 @@ class Prices:
         # Когда рынок загружен самим оверлеем (монотонные часы): сразу после
         # этого не нужно запускать отдельный проход «рынок устарел».
         self.market_at = 0.0
+        self._market_busy = False
         self.thread = threading.Thread(target=self._load, daemon=True)
         self.thread.start()
 
@@ -167,40 +168,48 @@ class Prices:
         # Иконки валют. Раньше функцию скачивания никто не вызывал: в папке
         # runtime\icons было пусто, и плашки писали «ex» текстом вместо значка.
         self._download_currency_icons()
-        # Полный проход дорог для официального trade API. Запускаем его только
-        # если полного успешного прохода нет или ему уже сутки; Shift+D всегда
-        # работает из локального кэша и не создаёт сетевых запросов.
-        # Полный проход (включая fixed-buyout лоты камней/предметов) идёт раз
-        # в сутки. Рынок материалов обновляем отдельно и чаще: это один общий
-        # снимок, без сотен запросов к trade API.
-        # Полный проход по камням сам не запускается НИКОГДА: он дорог для
-        # trade API и делается только вручную — пункт «Сканировать все камни»
-        # в меню трея. Здесь обновляется только рынок материалов: это один
-        # общий снимок, без сотен запросов.
-        refresh_args: list[str] | None = None
-        if market_refresh_is_due():
-            refresh_args = ["--market-only"]
-        if refresh_args is not None:
+        # Никакие процессы-сканирования автоматически не запускаются: полный
+        # проход по камням — только вручную из меню трея. Если сохранённый рынок
+        # устарел, он обновляется здесь же, в этом потоке, одним снимком таблиц —
+        # это не проход по каталогу.
+        if had_cache and self.book.size and market_refresh_is_due():
             try:
-                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                if getattr(sys, "frozen", False):
-                    command = [sys.executable, "--refresh-catalog", *refresh_args]
-                    root = Path(sys.executable).resolve().parent
-                else:
-                    command = [sys.executable, "-u", "-m",
-                               "aldur_appraiser.runeshape_catalog", *refresh_args]
-                    root = Path(__file__).resolve().parents[2]
-                self.scan_proc = subprocess.Popen(
-                    command, cwd=str(root), creationflags=flags, close_fds=True)
-                print(f"[{time.strftime('%H:%M:%S')}] [цены] запущен полный проход "
-                      f"цен: {' '.join(refresh_args)}", flush=True)
-            except Exception as exc:  # noqa: BLE001 — приложение должно жить и без сети
-                self.error = f"{type(exc).__name__}: {exc}"
-                # Молчаливый отказ запуска выглядел как «цены просто не пришли».
-                print(f"[{time.strftime('%H:%M:%S')}] [цены] не смог запустить "
-                      f"полный проход: {self.error}", flush=True)
+                started = time.time()
+                self.book.load(force=True)
+                self.market_at = time.monotonic()
+                print(f"[{time.strftime('%H:%M:%S')}] [цены] рынок обновлён: "
+                      f"{self.book.size} предметов за {time.time() - started:.0f} c",
+                      flush=True)
+            except Exception as exc:  # noqa: BLE001 — живём на сохранённых ценах
+                self._note_price_error("рынок", exc)
         self._remember_cache_mtime()
         self.ready.set()
+
+    def refresh_market(self) -> bool:
+        """Обновляет снимок рынка в фоне, без отдельного процесса-сканирования.
+
+        Проход по каталогу (291 награда) сюда не входит: он бывает только по
+        нажатию человека в меню трея.
+        """
+        if getattr(self, "_market_busy", False):
+            return False
+        self._market_busy = True
+
+        def work() -> None:
+            try:
+                started = time.time()
+                self.book.load(force=True)
+                self.market_at = time.monotonic()
+                print(f"[{time.strftime('%H:%M:%S')}] [цены] рынок обновлён: "
+                      f"{self.book.size} предметов за {time.time() - started:.0f} c",
+                      flush=True)
+            except Exception as exc:  # noqa: BLE001 — работаем на старом рынке
+                self._note_price_error("рынок", exc)
+            finally:
+                self._market_busy = False
+
+        threading.Thread(target=work, daemon=True).start()
+        return True
 
     def _download_currency_icons(self) -> None:
         """Скачивает недостающие значки валют в runtime\\icons (один раз)."""
@@ -1984,6 +1993,10 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                     for position, index in enumerate(indices):
                         reward = snapshot[index][0]
                         key = Appraiser.gem_key(reward)
+                        if self.scan_active():
+                            # Держим фоновый проход на паузе всё время, пока
+                            # идёт поиск по нажатию: он не должен занимать лимит.
+                            request_pause(90.0)
                         value = prices.price(reward)
                         if value:
                             # Цена уже записана в кэш самим price(): следующее
@@ -2384,23 +2397,21 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
         return stopped
 
     def auto_refresh_tick() -> None:
-        """Сам решает, пора ли обновить цены: время считается по файлам проекта.
+        """Обновляет только рынок — и только внутри самого оверлея.
 
-        Обновляется только рынок. Полный проход по камням никогда не стартует
-        сам — даже раз в сутки: только по нажатию в меню трея.
+        Никаких фоновых процессов-сканирований: автоматического прохода цен нет
+        вообще, ни полного, ни «только рынок» отдельным процессом. Полный проход
+        по камням запускается исключительно вручную из меню трея.
         """
-        if scan_is_running():
-            return
         if not prices.ready.is_set():
-            # Первая загрузка рынка ещё идёт: она сама обновит цены, отдельный
-            # проход сейчас только помешал бы.
+            # Первая загрузка рынка ещё идёт: она сама и обновит цены.
             return
         if time.monotonic() - getattr(prices, "market_at", 0.0) < MARKET_REFRESH_INTERVAL:
-            # Рынок только что загружен самим оверлеем: файл ещё не успел
-            # записаться, и проверка «рынок устарел» дала бы ложное «пора».
+            # Рынок только что загружен: файл ещё не успел записаться, и
+            # проверка «рынок устарел» дала бы ложное «пора».
             return
         if market_refresh_is_due():
-            start_scan(["--market-only"], why="рынок старше 15 минут", quiet=True)
+            prices.refresh_market()
 
     menu = QMenu()
     act_show = QAction("Показать / обновить цены", menu)
