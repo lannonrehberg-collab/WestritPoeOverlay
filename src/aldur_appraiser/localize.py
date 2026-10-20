@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Iterable
 
 from rapidfuzz import fuzz, process
 
@@ -44,16 +44,23 @@ def qty_from_token(token: str) -> int | None:
 
 
 # «... (1)» в конце строки — так русский клиент показывает количество.
-QTY_SUFFIX_RE = re.compile(rf"[\(\[]\s*([{_QTY_CHARS}]{{1,4}})\s*[\)\]]\s*$")
+# Точка после скобки — обычное дело для OCR: без неё «(2).» не распознавалось,
+# цифра оставалась в названии, и награда пропадала целиком.
+QTY_SUFFIX_RE = re.compile(
+    rf"[\(\[]\s*([{_QTY_CHARS}]{{1,4}})\s*[\)\]]\s*[.,;:]?\s*$")
 # «1x ...» — запасная форма на случай другой вёрстки.
-QTY_PREFIX_RE = re.compile(rf"^\s*([0-9A-Za-zА-Яа-яЁё]{{1,4}})\s*[xX×]\s*")
+QTY_PREFIX_RE = re.compile(r"^\s*([0-9A-Za-zА-Яа-яЁё]{1,4})\s*[xX×]\s*")
+# Символы, которые OCR выдаёт вместо цифр уровня: «2О», «2З», «І9».
+_LEVEL_CHARS = "0-9OoОоЗзІіIl|!SБб"
 # «Уровень умения 20: …», «Уровень камня поддержки 20: …»
 GEM_RE = re.compile(
-    r"уровень\s+(умения|камня|камней|поддержки|камня\s+поддержки)\s*(\d+)?\s*[:\-—]?\s*",
+    rf"уровень\s+(умения|камня|камней|поддержки|камня\s+поддержки)\s*"
+    rf"([{_LEVEL_CHARS}]{{1,3}})?\s*[:\-—]?\s*",
     re.IGNORECASE,
 )
 # OCR иногда теряет «Уровень», оставляя «Умения 20: …» в начале строки.
-GEM_SHORT_LEVEL_RE = re.compile(r"^\s*умени[ея]\s*(\d+)\s*[:\-—]?\s*", re.IGNORECASE)
+GEM_SHORT_LEVEL_RE = re.compile(
+    rf"^\s*умени[ея]\s*([{_LEVEL_CHARS}]{{1,3}})\s*[:\-—]?\s*", re.IGNORECASE)
 # «Умение: Дождь клинков», «Поддержка: Рунное извлечение» — так камни подписаны
 # в панели торговца. Уровень там не указывают, поэтому цену ищем без фильтра
 # уровня (иначе у части камней лотов вообще нет и цена не находится).
@@ -271,14 +278,14 @@ def parse_line(raw: str, *, cutoff: float = 70.0, allow_unknown: bool = True) ->
     # иначе такой камень ошибочно становится безымянным предметом и отпадает.
     gem = GEM_RE.search(text)
     if gem:
-        level = int(gem.group(2)) if gem.group(2) else None
+        level = qty_from_token(gem.group(2) or "")
         body = text[gem.end():].strip()
         kind = "gem"
     else:
         short_level = GEM_SHORT_LEVEL_RE.match(text)
         tolerant_level = None if short_level else level_prefix(text)
         if short_level:
-            level = int(short_level.group(1))
+            level = qty_from_token(short_level.group(1))
             body = text[short_level.end():].strip()
             kind = "gem"
         elif tolerant_level is not None:

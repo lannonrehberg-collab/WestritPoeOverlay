@@ -19,6 +19,12 @@ def _isolated_layout(tmp_path, monkeypatch):
     import aldur_appraiser.temple.editor as ed
 
     monkeypatch.setattr(ed, "layout_path", lambda: tmp_path / "layout.json")
+    # Кэш значков пишется в пользовательский каталог настроек. В тестах он
+    # должен быть временным: иначе папка AppData занята рабочей копией игры и
+    # запись падает с PermissionError, а тест проверяет совсем не это.
+    monkeypatch.setattr("aldur_appraiser.config.cache_dir", lambda: tmp_path)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path))
 
 
 def test_editor_builds_and_reflects_engine_state():

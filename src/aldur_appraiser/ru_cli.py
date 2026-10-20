@@ -11,7 +11,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 from aldur_appraiser.localize import Reward, parse_lines

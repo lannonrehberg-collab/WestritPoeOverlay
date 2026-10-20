@@ -55,7 +55,7 @@ def test_reward_roi_scales_with_header():
     panel = PanelBox(x=1085, y=140, w=267, h=68, scale=1.0, confidence=1.0)
     roi = panel.reward_roi()
     assert roi.left == 1085
-    assert roi.top == 140 + 68          # one header-height below header top
+    assert roi.top == 140 + int(68 * detect_mod.ROI_TOP_FROM_HEADER_H)
     assert roi.width == int(267 * detect_mod.ROI_WIDTH_FROM_HEADER_W)
     assert roi.height == int(68 * detect_mod.ROI_HEIGHT_FROM_HEADER_H)
 

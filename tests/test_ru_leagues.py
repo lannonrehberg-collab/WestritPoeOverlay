@@ -8,18 +8,24 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 
 from aldur_appraiser.leagues import (
-    AUTO_LEAGUE_LABEL, league_slug, order_leagues, parse_leagues,
+    AUTO_LEAGUE_LABEL,
+    league_slug,
+    order_leagues,
+    parse_leagues,
 )
 from aldur_appraiser.pricing.ru_prices import PriceBook, price_cache_path
-from aldur_appraiser.runeshape_catalog import (
-    PRICE_SCAN_SCHEMA, catalog_archive_path, catalog_path, market_refresh_is_due,
-    refresh_is_due, refresh_state_path,
-)
 from aldur_appraiser.ru_settings import RuSettings
+from aldur_appraiser.runeshape_catalog import (
+    PRICE_SCAN_SCHEMA,
+    catalog_archive_path,
+    catalog_path,
+    market_refresh_is_due,
+    refresh_is_due,
+    refresh_state_path,
+)
 
 
 def test_league_slug_is_safe_for_file_names() -> None:
@@ -51,7 +57,7 @@ def test_auto_option_is_offered_by_label(tmp_path, monkeypatch) -> None:
 
 
 def test_price_cache_is_separate_for_every_league(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(os.environ, "ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
     forbidden = price_cache_path("Forbidden Rites")
     aldur = price_cache_path("Runes of Aldur")
     auto = price_cache_path("")
@@ -62,7 +68,7 @@ def test_price_cache_is_separate_for_every_league(tmp_path, monkeypatch) -> None
 
 
 def test_prices_of_the_previous_league_survive_a_switch(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(os.environ, "ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
     first = PriceBook(league="Runes of Aldur")
     first._book = {"Aldur's Saga": 23037.0}
     first._scout = {"Aldur's Saga": 23037.0}
@@ -80,7 +86,7 @@ def test_prices_of_the_previous_league_survive_a_switch(tmp_path, monkeypatch) -
 
 
 def test_shared_cache_is_not_reused_by_another_league(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(os.environ, "ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
     aldur = PriceBook(league="Runes of Aldur")
     aldur._book = {"Aldur's Saga": 23037.0}
     aldur._scout = {"Aldur's Saga": 23037.0}
@@ -97,7 +103,7 @@ def test_shared_cache_is_not_reused_by_another_league(tmp_path, monkeypatch) -> 
 
 
 def test_switch_league_clears_and_reloads_cache(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(os.environ, "ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
     aldur = PriceBook(league="Runes of Aldur")
     aldur._book = {"Aldur's Saga": 23037.0}
     aldur._scout = {"Aldur's Saga": 23037.0}
@@ -115,7 +121,7 @@ def test_switch_league_clears_and_reloads_cache(tmp_path, monkeypatch) -> None:
 
 
 def test_catalog_keeps_a_separate_snapshot_for_every_league(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(os.environ, "ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
     assert catalog_archive_path("Forbidden Rites").name == \
         "runeshape_catalog-forbidden-rites.json"
     assert catalog_archive_path("Runes of Aldur").name == \
@@ -124,7 +130,7 @@ def test_catalog_keeps_a_separate_snapshot_for_every_league(tmp_path, monkeypatc
 
 
 def test_settings_remember_leagues_and_the_prompt_flag(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(os.environ, "ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
     settings = RuSettings()
     assert settings.ask_league is True
     settings.league = "Runes of Aldur"
@@ -152,7 +158,7 @@ def _ready_state(league: str) -> dict:
 
 
 def test_change_of_league_forces_a_new_scan(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(os.environ, "ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
     settings = RuSettings()
     settings.league = "Runes of Aldur"
     settings.save()
@@ -167,7 +173,7 @@ def test_change_of_league_forces_a_new_scan(tmp_path, monkeypatch) -> None:
 
 
 def test_market_freshness_is_measured_for_the_selected_league(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(os.environ, "ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALDUR_APPRAISER_DATA_DIR", str(tmp_path))
     settings = RuSettings()
     settings.league = "Runes of Aldur"
     settings.save()

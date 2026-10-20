@@ -143,7 +143,6 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_capture_test(args: argparse.Namespace) -> int:
-    import cv2
 
     from aldur_appraiser.vision.capture import default_backend, open_capture
 

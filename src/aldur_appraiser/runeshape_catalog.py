@@ -9,12 +9,12 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import math
 import os
 import re
 import sys
-import time
-import math
 import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -23,7 +23,9 @@ from aldur_appraiser import netenv
 from aldur_appraiser.leagues import league_slug
 from aldur_appraiser.localize import ru_to_en
 from aldur_appraiser.pricing.ru_prices import (
-    PriceBook, bundled_exchange_families, price_cache_path,
+    PriceBook,
+    bundled_exchange_families,
+    price_cache_path,
 )
 from aldur_appraiser.ru_settings import RuSettings, config_dir
 from aldur_appraiser.winproc import process_alive

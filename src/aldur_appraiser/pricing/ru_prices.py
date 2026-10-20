@@ -20,10 +20,10 @@ import statistics
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable
 from urllib.parse import quote
 
 import httpx
@@ -105,6 +105,10 @@ CATEGORIES = [
 # Результат полного сканирования — снимок на сутки. Его нельзя игнорировать
 # через полчаса и снова обращаться к trade API от нажатия Shift+D.
 TRADE_CACHE_TTL = 26 * 60 * 60
+# Живые котировки (лот сайта, заявка обменника) стареют быстро: 26 часов для
+# них — это вчерашняя цена. Полному проходу по камням по-прежнему хватает
+# суточного снимка, а точечные запросы живут несколько часов.
+LIVE_QUOTE_TTL = 6 * 60 * 60
 RATE_TTL = 60 * 60         # курс валют — час
 BOOK_TTL = 60 * 60         # обменная таблица — час
 # Текущая цена агрегатора годится только когда за ней есть не единичная сделка.
@@ -359,6 +363,19 @@ class TradeLimiter:
         with self._lock:
             return max(0.0, self._blocked_until.get(self._bucket(kind), 0.0) - time.time())
 
+    def block(self, kind: str, seconds: float) -> None:
+        """Запрещает обращения на время.
+
+        Нужно для ответа 429 без заголовков Retry-After: иначе цикл повторов
+        отправлял бы запрос ещё три раза подряд и только усиливал блокировку.
+        """
+        if seconds <= 0:
+            return
+        with self._lock:
+            bucket = self._bucket(kind)
+            self._blocked_until[bucket] = max(self._blocked_until.get(bucket, 0.0),
+                                              time.time() + seconds)
+
     @staticmethod
     def _sleep_with_heartbeat(seconds: float,
                               on_wait: Callable[[float], None] | None) -> None:
@@ -576,7 +593,9 @@ class PriceBook:
     # Имя -> время, когда у тонкой пары снимка сайт не дал ни одного лота.
     _thin_miss: dict[str, float] = field(default_factory=dict)
     _limiter: TradeLimiter = field(default_factory=TradeLimiter)
-    _lock: threading.Lock = field(default_factory=threading.Lock)
+    # RLock: сохранение кэша вызывается изнутри уже захваченной блокировки.
+    _lock: threading.RLock = field(default_factory=threading.RLock)
+    _save_lock: threading.Lock = field(default_factory=threading.Lock)
 
     # --- служебное ---------------------------------------------------------
 
@@ -640,42 +659,49 @@ class PriceBook:
 
     def _save_cache(self) -> None:
         # Пустота не должна затирать рабочие цены: иначе один неудачный запуск
-        # (например, без сети) обнуляет кэш для всех следующих.
-        if not self._book and not self._scout:
+        # (например, без сети) обнуляет кэш для всех следующих. При этом цены
+        # камней — тоже цены: на чистой установке таблиц может ещё не быть, а
+        # найденный по Shift+D камень уже есть, и терять его нельзя.
+        if not self._book and not self._scout and not self._gems:
             return
-        try:
-            self._merge_gems_from_disk()
-        except Exception:  # noqa: BLE001 — слияние не должно мешать записи
-            pass
-        try:
-            payload = json.dumps({
-                "league": self.league,
-                "loaded_at": self._loaded_at,
-                "book": self._book,
-                "rates": self._rates,
-                "rates_at": self._rates_at,
-                "gem_cache_version": 3,
-                "gems": self._gems,
-                "gem_source": self._gem_source,
-                "icons": self.icons,
-                "scout": self._scout,
-                "scout_volume": self._scout_volume,
-                "ids": self._ids,
-                "base_ids": self._base_ids,
-                "exchange_schema": EXCHANGE_SCHEMA,
-                "exchange": self._exchange,
-                "exchange_pairs": self._exchange_pairs,
-                "exchange_at": self._exchange_at,
-                "scout_at": self._scout_at,
-            }, ensure_ascii=False)
-            self._write_cache_file(self._cache_file, payload)
-            # Общий prices.json остаётся «текущим рынком»: на него смотрят
-            # проверка свежести и внешние инструменты.
-            shared = self._shared_cache_file
-            if shared != self._cache_file:
-                self._write_cache_file(shared, payload)
-        except OSError:
-            pass
+        with self._save_lock:
+            try:
+                self._merge_gems_from_disk()
+            except Exception:  # noqa: BLE001 — слияние не должно мешать записи
+                pass
+            try:
+                with self._lock:
+                    # Снимок словарей: их меняет и поток цен, и загрузка рынка.
+                    payload = json.dumps({
+                        "league": self.league,
+                        "loaded_at": self._loaded_at,
+                        "book": dict(self._book),
+                        "rates": dict(self._rates),
+                        "rates_at": self._rates_at,
+                        "gem_cache_version": 3,
+                        "gems": dict(self._gems),
+                        "gem_source": dict(self._gem_source),
+                        "icons": dict(self.icons),
+                        "scout": dict(self._scout),
+                        "scout_volume": dict(self._scout_volume),
+                        "ids": dict(self._ids),
+                        "base_ids": dict(self._base_ids),
+                        "exchange_schema": EXCHANGE_SCHEMA,
+                        "exchange": dict(self._exchange),
+                        "exchange_pairs": dict(self._exchange_pairs),
+                        "exchange_at": self._exchange_at,
+                        "scout_at": self._scout_at,
+                    }, ensure_ascii=False)
+                self._write_cache_file(self._cache_file, payload)
+                # Общий prices.json остаётся «текущим рынком»: на него смотрят
+                # проверка свежести и внешние инструменты.
+                shared = self._shared_cache_file
+                if shared != self._cache_file:
+                    self._write_cache_file(shared, payload)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                # RuntimeError — словарь изменился во время сериализации:
+                # следующая запись пройдёт, терять из-за этого всё незачем.
+                pass
 
     @staticmethod
     def _read_cache_json(path: Path) -> dict | None:
@@ -690,7 +716,7 @@ class PriceBook:
         # Пишем через временный файл: обрыв записи не испортит кэш.
         # В имени — номер процесса: оверлей и суточный сканер пишут один и тот
         # же файл лиги, и общий временный файл давал обрубок кэша.
-        tmp = path.with_suffix(f".{os.getpid()}.json.tmp")
+        tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.json.tmp")
         try:
             tmp.write_text(payload, encoding="utf-8")
             os.replace(tmp, path)
@@ -747,8 +773,10 @@ class PriceBook:
                 if old is None or stamp > old[1]:
                     self._gem_source[key] = (str(value[0]), stamp)
         else:
-            self._gems = {}
-            self._gem_source = {}
+            # Старые записи (до 3) не смешиваем с точными, но и то, что уже
+            # найдено в этой сессии, не выбрасываем: чистка памяти теряла
+            # только что полученную цену камня.
+            pass
         self.icons = {str(k): str(v) for k, v in data.get("icons", {}).items()}
         self._scout = {str(k): float(v) for k, v in data.get("scout", {}).items()}
         self._scout_volume = {str(k): int(v)
@@ -815,6 +843,10 @@ class PriceBook:
             short = str(league.get("ShortName") or "").lower()
             if want and want in (value, short):
                 return league
+        if want:
+            # Лигу выбрал человек, а её нет в ответе: подставлять «текущую»
+            # нельзя — цены другой лиги записались бы под именем выбранной.
+            return None
         return next((lg for lg in leagues if lg.get("IsCurrent")), leagues[0])
 
     def load_scout(self, client: httpx.Client) -> bool:
@@ -841,18 +873,24 @@ class PriceBook:
                     data = resp.json()
                 except (httpx.HTTPError, ValueError):
                     break
-                pages = int(data.get("Pages") or 1)
-                for item in data.get("Items") or []:
-                    name = item.get("Text")
-                    price = item.get("CurrentPrice")
-                    api_id = item.get("ApiId")
-                    if name and api_id:
-                        self._ids[str(name)] = str(api_id)
-                    if name and item.get("BaseItemTypeId"):
-                        self._base_ids[str(name)] = str(item["BaseItemTypeId"])
-                    if name and price is not None:
-                        prices[str(name)] = float(price)
-                        volumes[str(name)] = int(item.get("CurrentQuantity") or 0)
+                pages = int((data or {}).get("Pages") or 1) if isinstance(data, dict) else 1
+                for item in ((data.get("Items") or []) if isinstance(data, dict) else []):
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        name = item.get("Text")
+                        price = item.get("CurrentPrice")
+                        api_id = item.get("ApiId")
+                        if name and api_id:
+                            self._ids[str(name)] = str(api_id)
+                        if name and item.get("BaseItemTypeId"):
+                            self._base_ids[str(name)] = str(item["BaseItemTypeId"])
+                        if name and price is not None:
+                            prices[str(name)] = float(price)
+                            volumes[str(name)] = int(item.get("CurrentQuantity") or 0)
+                    except (TypeError, ValueError):
+                        # Один битый элемент не должен ронять обход всей категории.
+                        continue
                 page += 1
                 time.sleep(0.25)          # не частим: сервис общественный
         if not prices:
@@ -869,6 +907,10 @@ class PriceBook:
             self._rates["divine"] = divine
             if chaos_per_divine > 0:
                 self._rates["chaos"] = divine / chaos_per_divine
+            # Курсы пришли из самой игры — отмечаем их свежими, иначе следующая
+            # же загрузка заменит их курсом трейда (в замере 691.6 вместо 739.2)
+            # и все пересчёты divine/chaos уедут.
+            self._rates_at = time.time()
         return True
 
     def use_cache(self, *, reload: bool = False) -> bool:
@@ -904,6 +946,10 @@ class PriceBook:
             self._ids = {}
             self._base_ids = {}
             self._loaded_names = {}
+            # «Лотов нет» и ошибка трейда относятся к прежней лиге: без сброса
+            # после переключения до получаса цены новой лиги не запрашивались бы.
+            self._thin_miss = {}
+            self._last_trade_error = None
             self._exchange_at = 0.0
             self._scout_at = 0.0
             self._loaded_at = 0.0
@@ -1107,6 +1153,10 @@ class PriceBook:
                 continue
             self._limiter.observe(kind, resp.headers)
             if resp.status_code == 429:
+                if self._limiter.blocked_for(kind) <= 0.0:
+                    # 429 без Retry-After: ставим паузу сами, иначе цикл
+                    # повторов отправит запрос ещё несколько раз подряд.
+                    self._limiter.block(kind, _retry_delay(resp))
                 if not background and self._limiter.blocked_for(kind) > MAX_INLINE_WAIT:
                     return resp
                 # observe() уже записал Retry-After. Следующая итерация пройдёт
@@ -1141,6 +1191,10 @@ class PriceBook:
                 continue
             self._limiter.observe(kind, resp.headers)
             if resp.status_code == 429:
+                if self._limiter.blocked_for(kind) <= 0.0:
+                    # 429 без Retry-After: ставим паузу сами, иначе цикл
+                    # повторов отправит запрос ещё несколько раз подряд.
+                    self._limiter.block(kind, _retry_delay(resp))
                 if not background and self._limiter.blocked_for(kind) > MAX_INLINE_WAIT:
                     return resp
                 # observe() уже записал Retry-After; см. аналогичный GET выше.
@@ -1426,7 +1480,7 @@ class PriceBook:
         key = f"item|{en_name}"
         with self._lock:
             cached = self._gems.get(key)
-            if not force and cached and (time.time() - cached[1]) < TRADE_CACHE_TTL:
+            if not force and cached and (time.time() - cached[1]) < LIVE_QUOTE_TTL:
                 return cached[0] or None
 
         api_id = self._ids.get(en_name) or _slugify(en_name)
@@ -1641,18 +1695,14 @@ class PriceBook:
         # согласию источников. Раньше здесь первым шёл один часовой срез, и у
         # дешёвых валют его грубая пара (1..2 exalted за сферу) давала цену
         # ниже рынка, а у дорогих рун — выше.
-        consensus = self.exchange_price(en_name)
+        consensus = self.exchange_price(en_name, live=live)
         if consensus is not None:
             return consensus
         base = ru_to_en().get(en_name)
         if base:
-            consensus = self.exchange_price(base)
+            consensus = self.exchange_price(base, live=live)
             if consensus is not None:
                 return consensus
-        if not bulk:
-            direct_listing = self._market_price(en_name)
-            if direct_listing is not None:
-                return direct_listing
         # «Только кэш» используется для первого показа и прогрева каталога.
         # Он не должен превращать сотни неизвестных строк в запросы к трейду.
         if not live:
@@ -1739,26 +1789,36 @@ class PriceBook:
     def reference_price(self, en_name: str) -> float | None:
         """Надёжная рыночная цена из таблиц, без живых заявок трейд-сайта.
 
-        Порядок: официальный снимок обменника → poe2scout (с объёмом) →
-        poe.ninja. Живые заявки сюда не входят: их проверяют по этому ориентиру.
+        Порядок: официальный снимок обменника → poe.ninja → poe2scout.
+
+        Ориентир нужен, чтобы отбрасывать мусорные лоты, поэтому тонкие данные
+        сюда не годятся: одна-две сделки за час врут на порядки, и нормальный
+        лот начинал считаться «дороже рынка втрое» — цена пропадала.
         """
         if not en_name:
             return None
-        snap = self.snapshot_unit(en_name)
+        snap = self.snapshot_price(en_name)
         if snap is not None:
-            return snap
+            low, high, traded, _unit = snap
+            if (traded >= THIN_PAIR_TRADES and low > 0 and high >= low
+                    and high / low <= MAX_SNAPSHOT_PAIR_SPREAD):
+                return low
         baseline = self._book.get(en_name)
-        if baseline and baseline > 0:
-            return float(baseline)
         volume = self._scout_volume.get(en_name, 0)
         aggregate = self._scout.get(en_name)
-        if aggregate and aggregate > 0 and volume >= MIN_SCOUT_VOLUME:
-            return float(aggregate)
-        if aggregate and aggregate > 0:
-            return float(aggregate)
-        return None
+        candidates = [value for value in
+                      (float(baseline) if baseline and baseline > 0 else None,
+                       float(aggregate) if aggregate and aggregate > 0
+                       and volume >= MIN_SCOUT_VOLUME else None)
+                      if value is not None]
+        if not candidates:
+            return None
+        # Несколько источников — берём самый высокий: ориентир должен отсекать
+        # только откровенный мусор, а не занижать цену.
+        return max(candidates)
 
-    def exchange_price(self, en_name: str, *, live_conflict: bool = False) -> float | None:
+    def exchange_price(self, en_name: str, *, live_conflict: bool = False,
+                       live: bool = True) -> float | None:
         """Цена обменного предмета — самая низкая цена, по которой он уходит.
 
         Основа — средняя poe.ninja (``_book``): она считается по настоящим
@@ -1804,10 +1864,10 @@ class PriceBook:
         if snap is not None and (trusted is None or snap < trusted):
             trusted = snap
         if trusted is not None:
-            if thin:
-                live = self._cheaper_live_listing(en_name, trusted)
-                if live is not None:
-                    return live
+            if thin and live:
+                live_price = self._cheaper_live_listing(en_name, trusted)
+                if live_price is not None:
+                    return live_price
             return trusted
         # 3. poe2scout — только с подтверждённым объёмом сделок.
         volume = self._scout_volume.get(en_name, 0)
@@ -1815,15 +1875,19 @@ class PriceBook:
         if aggregate and aggregate > 0:
             if volume >= MIN_SCOUT_VOLUME:
                 return float(aggregate)
+            if not live:
+                # Первый показ не ходит на торговый сайт: без лота честнее «?»,
+                # чем задержка на минуты и сожжённый лимит запросов.
+                return None
             # Тонкий агрегат держится на одной-двух сделках и врёт на порядки:
             # «Малая руна заряда» — 40155 exalted (55 divine) при всей родне в
             # 3–50 exalted. Такую цифру подтверждаем лотом сайта: он и есть
             # цена, по которой предмет покупают. Лотов нет вовсе — цены нет.
-            live = self._site_listing_price(en_name)
-            if live is not None:
-                return live
+            live_price = self._site_listing_price(en_name)
+            if live_price is not None:
+                return live_price
             return float(aggregate) if self._last_trade_error else None
-        if live_conflict:
+        if live_conflict and live:
             return self.price_exchange(en_name, force=True)
         return None
 
@@ -1871,7 +1935,7 @@ class PriceBook:
         with self._lock:
             cached = (self._gems.get(f"listing|{en_name}")
                       or self._gems.get(f"item|{en_name}"))
-            if not cached or (time.time() - cached[1]) >= TRADE_CACHE_TTL:
+            if not cached or (time.time() - cached[1]) >= LIVE_QUOTE_TTL:
                 return None
             value = cached[0] or None
         if value is None:
@@ -1898,7 +1962,7 @@ class PriceBook:
         key = f"listing|{en_name}"
         with self._lock:
             cached = self._gems.get(key)
-            if not force and cached and (time.time() - cached[1]) < TRADE_CACHE_TTL:
+            if not force and cached and (time.time() - cached[1]) < LIVE_QUOTE_TTL:
                 return cached[0] or None
 
         owns = client is None

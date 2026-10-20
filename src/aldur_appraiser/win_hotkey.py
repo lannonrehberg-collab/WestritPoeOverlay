@@ -146,10 +146,14 @@ class WinHotkey:
             # id 1 is arbitrary but unique within this thread.
             if not user32.RegisterHotKey(None, 1, self._mods, self._vk):
                 err = ctypes.get_last_error()
-                self._error = (
-                    "Kombination ist bereits belegt" if err == 1409  # ERROR_HOTKEY_ALREADY_REGISTERED
-                    else f"RegisterHotKey fehlgeschlagen (Win32-Fehler {err})"
-                )
+                # ERROR_HOTKEY_ALREADY_REGISTERED: такую клавишу уже занял кто-то
+                # другой. Текст был на немецком — в русском оверлее это выглядело
+                # как чужая ошибка, поэтому здесь по-русски.
+                if err == 1409:
+                    self._error = "клавиша уже занята другой программой"
+                else:
+                    self._error = (f"Windows не разрешила клавишу "
+                                   f"(код ошибки {err})")
                 _debug(self._error)
                 self._ok = False
                 self._ready.set()

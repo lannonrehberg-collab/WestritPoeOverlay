@@ -141,7 +141,6 @@ def fetch_leagues(timeout: float = 15.0, client=None) -> list[str]:
     При любой сетевой ошибке возвращает то, что уже известно — выбор лиги не
     должен ломаться из-за недоступного сайта.
     """
-    import httpx
 
     from aldur_appraiser import netenv
 

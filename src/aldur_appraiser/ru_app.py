@@ -27,22 +27,38 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from aldur_appraiser.localize import BONUS_RE, QTY_SUFFIX_RE, Reward, parse_lines
+from aldur_appraiser.game_window import (
+    find_game_window,
+    foreground_is_game,
+    foreground_process,
+)
+from aldur_appraiser.leagues import (
+    AUTO_LEAGUE_LABEL,
+    available_leagues,
+    fetch_leagues,
+    order_leagues,
+)
+from aldur_appraiser.localize import (
+    _QTY_CHARS,
+    BONUS_RE,
+    QTY_SUFFIX_RE,
+    Reward,
+    parse_lines,
+    qty_from_token,
+)
 from aldur_appraiser.netenv import drop_proxy_env
 from aldur_appraiser.pricing.ru_prices import PriceBook, bundled_exchange_families
 from aldur_appraiser.resources import resource_path
-from aldur_appraiser.ru_cli import ocr_rewards
 from aldur_appraiser.ru_settings import RuSettings, config_dir
 from aldur_appraiser.runeshape_catalog import (
-    MARKET_REFRESH_INTERVAL, cancel_refresh_state, clear_pause,
-    market_refresh_is_due, read_refresh_state, request_pause, scan_pid,
+    MARKET_REFRESH_INTERVAL,
+    cancel_refresh_state,
+    clear_pause,
+    market_refresh_is_due,
+    read_refresh_state,
+    request_pause,
+    scan_pid,
     scan_state_is_stale,
-)
-from aldur_appraiser.game_window import (
-    find_game_window, foreground_is_game, foreground_process,
-)
-from aldur_appraiser.leagues import (
-    AUTO_LEAGUE_LABEL, available_leagues, fetch_leagues, order_leagues,
 )
 from aldur_appraiser.vision import read_image
 from aldur_appraiser.vision.detect import PanelBox, PanelDetector, _clamp_roi
@@ -365,7 +381,11 @@ class Appraiser:
 
         if panel is not None:
             roi = self.detector.reward_image(frame, panel)
-            origin = (panel.reward_roi().left, panel.reward_roi().top)
+            # Начало координат — у ОБРЕЗАННОЙ области: reward_image() обрезает её
+            # по краям кадра, и без такого же сдвига все плашки уезжали на
+            # величину обрезки, если панель прижата к краю экрана.
+            region = _clamp_roi(panel.reward_roi(), frame.shape)
+            origin = (region.left, region.top)
             ocr_lines = merge_quantity_lines(self.read_lines(roi))
             ocr_lines = drop_own_badges(ocr_lines)   # страховка от своих же плашек
             ocr_lines = dedupe_overlapping(ocr_lines)
@@ -408,7 +428,13 @@ class Appraiser:
                               f"без награды: {line.text!r}", flush=True)
         # Строка без рамки иначе остаётся без плашки: цену ей некуда поставить.
         pairs = fill_missing_boxes(pairs)
-        rewards = self.stabilize([reward for reward, _box in pairs])
+        # Стабильные названия: если набор наград совпал с прошлым прочтением,
+        # берём прежние названия (распознавание каждый раз пишет чуть иначе),
+        # а рамки — всегда свежие, иначе плашки уедут со своих строк.
+        stable = self.stabilize([reward for reward, _box in pairs])
+        if len(stable) == len(pairs):
+            pairs = [(reward, box) for reward, (_old, box) in zip(stable, pairs, strict=True)]
+        rewards = [reward for reward, _box in pairs]
         # Разделитель «Бонусная награда» надёжнее любых догадок по промежуткам.
         divider = None
         for line in ocr_lines:
@@ -463,7 +489,7 @@ class Appraiser:
         self._last_rewards = list(rewards)
         if not previous or len(previous) != len(rewards):
             return rewards
-        for old, new in zip(previous, rewards):
+        for old, new in zip(previous, rewards, strict=True):
             if old.en_name != new.en_name or old.qty != new.qty or old.kind != new.kind:
                 return rewards
         return previous
@@ -765,7 +791,12 @@ def format_number(value: float, rates: dict[str, float]) -> tuple[str, str]:
         return f"{value:,.0f}".replace(",", " "), "exalted"
     if value >= 10:
         return f"{value:.0f}", "exalted"
-    return f"{value:.1f}", "exalted"
+    if value >= 1:
+        return f"{value:.1f}", "exalted"
+    if value >= 0.1:
+        return f"{value:.2f}", "exalted"
+    # Совсем дешёвые предметы: «0.0 exalted» выглядело как «цены нет».
+    return f"{value:.3f}", "exalted"
 
 
 def format_value(value: float | None, rates: dict[str, float]) -> str:
@@ -791,24 +822,29 @@ def roi_signature(detector, frame, panel) -> np.ndarray | None:
         return None
 
 
-QTY_ONLY_RE = re.compile(r"^[\(\[]?\s*(\d{1,3})\s*[\)\]]?$|^(\d{1,3})\s*[xX×]$")
+QTY_ONLY_RE = re.compile(rf"^[\(\[]?\s*([{_QTY_CHARS}]{{1,3}})\s*[\)\]]?\s*[.,;:]?$"
+                         rf"|^([{_QTY_CHARS}]{{1,3}})\s*[xX×]\s*[.,;:]?$")
 
 
 # Текст, который бывает только у наших плашек («661 ex», «1 chaos · 55.9 exalted»,
 # «(3 шт)»). Нужен как страховка: если плашки всё же попали в снимок, строки
 # отбрасываются и не считаются наградами.
 #
-# «шт» узнаётся только в конце строки или в скобках: у плашки вся строка — это
-# «(3 шт)», а у живой награды «5 шт. случайной валюты» слово стоит в середине.
-# Раньше проверка была «где угодно» и вместе с плашкой выбрасывала саму награду
-# (снимки 1600x900_019 и 1600x900_020: строка пропадала с панели целиком).
+# Проверка заякорена на ВСЮ строку: раньше достаточно было любого «…», «·» или
+# «шт.» в конце, и настоящая награда, где OCR поставил многоточие, исчезала
+# целиком. У плашки вся строка — это только число, валюта и «(N шт)».
 OWN_BADGE_RE = re.compile(
-    r"(\bex\b|\bdiv\b|·|…|\d+\s*шт[а-яё]*\.?\s*\)?\s*$)", re.IGNORECASE)
+    r"^\s*(?:"
+    r"\d+(?:[.,]\d+)?\s*(?:ex|div|chaos|mirror|exalted|divine)\b.*"   # «661 ex»
+    r"|\(?\s*\d+\s*шт[а-яё]*\.?\s*\)?"                                # «(3 шт)», «3 шт.»
+    r"|…|\.\.\."                                                      # «…» загрузки
+    r")\s*$",
+    re.IGNORECASE)
 
 
 def drop_own_badges(lines: list) -> list:
     """Убирает из распознанного строки, похожие на наши плашки с ценами."""
-    return [line for line in lines if not OWN_BADGE_RE.search(line.text or "")]
+    return [line for line in lines if not OWN_BADGE_RE.match((line.text or "").strip())]
 
 
 def merge_quantity_lines(lines: list) -> list:
@@ -820,19 +856,37 @@ def merge_quantity_lines(lines: list) -> list:
     Склеиваем осторожно: только если у строки ещё нет количества, блок стоит
     рядом (а не в другом углу панели) и на той же высоте. Иначе к награде
     приклеивалось постороннее число и цена считалась за «19 штук».
+
+    Запас по горизонтали — до восьми высот строки: в панели количество стоит
+    отдельной узкой колонкой у правого края, и прежние 2.5 высоты не доставали
+    до него. Само число читается и как «З»/«О»/«І» — их приводит в порядок
+    ``qty_from_token``, иначе склейка пропускалась и цена считалась за штуку.
     """
     out: list = []
     for line in sorted(lines, key=lambda ln: ln.top):
-        match = QTY_ONLY_RE.match((line.text or "").strip())
-        if match and out and line.box is not None:
+        text = (line.text or "").strip()
+        match = QTY_ONLY_RE.match(text)
+        digits = None
+        if match:
+            value = qty_from_token(match.group(1) or match.group(2) or "")
+            digits = None if value is None else str(value)
+        if digits and out and line.box is not None:
             previous = out[-1]
-            if previous.box is not None and not QTY_SUFFIX_RE.search(previous.text):
-                row_height = max(8.0, previous.box[3] - previous.box[1])
+            if not QTY_SUFFIX_RE.search(previous.text):
+                row_height = max(8.0, (previous.box[3] - previous.box[1])
+                                 if previous.box else 8.0)
+                if previous.box is None:
+                    # У названия нет рамки: количество всё равно нужно, иначе
+                    # цена считается за одну штуку. Ставим на место числа.
+                    merged = OcrLine(text=f"{previous.text} ({digits})",
+                                     conf=previous.conf, top=previous.top,
+                                     box=line.box)
+                    out[-1] = merged
+                    continue
                 same_row = abs(line.box[1] - previous.box[1]) < row_height * 0.9
                 gap = line.box[0] - previous.box[2]
-                near = -row_height <= gap <= row_height * 2.5
+                near = -row_height <= gap <= row_height * 8.0
                 if same_row and near:
-                    digits = match.group(1) or match.group(2) or "1"
                     merged = OcrLine(
                         text=f"{previous.text} ({digits})",
                         conf=previous.conf,
@@ -875,6 +929,10 @@ def capture_settled(monitor: int, detector=None, *, attempts: int = 6,
         frame = again
         if settled:
             break
+    # Рамку панели уточняем по последнему кадру: за время анимации панель могла
+    # сдвинуться, и координаты строк уехали бы вместе с ней.
+    if detector is not None:
+        panel = detector.find_panel(frame) or panel
     return frame, mon, panel
 
 
@@ -896,7 +954,12 @@ def drop_fragments(rewards: list) -> list:
         for other in rewards:
             if other is reward or other.ru_name is None:
                 continue
-            if other.raw and text in other.raw.lower() and len(other.raw) > len(text) + 2:
+            other_text = (other.raw or "").lower().strip()
+            # Обрывок — это КУСОК той же строки, а не любая награда, чьё имя
+            # содержит это слово: раньше «Сфера» считалась обрывком строки
+            # «Сфера превращения (2)» даже когда стояла отдельной наградой.
+            if (other_text.startswith(text)
+                    and len(text) < 0.6 * len(other_text)):
                 fragment = True
                 break
         if not fragment:
@@ -912,19 +975,21 @@ def fill_missing_boxes(pairs: list) -> list:
     «Уровень умения 20: Кольцо морозного пламени» на панели. Высоту и шаг строк
     берём у соседей, а место достраиваем от ближайшей строки с рамкой.
     """
-    boxes = [box for _reward, box in pairs if box]
+    boxes = [box for _reward, box in pairs if box and (box[3] - box[1]) > 2]
     if not boxes:
         return pairs
     heights = sorted(box[3] - box[1] for box in boxes)
     height = heights[len(heights) // 2]
-    steps = sorted(b[1] - a[1] for a, b in zip(boxes, boxes[1:]) if b[1] > a[1])
-    # Именно МИНИМАЛЬНЫЙ шаг: пропущенная строка как раз и раздувает часть
-    # промежутков, а плотный шаг между строками с рамками остаётся верным.
-    step = steps[0] if steps else height * 1.6
+    # Шаг строк — МЕДИАНА правдоподобных промежутков. Раньше брался минимальный:
+    # одна пара чуть смещённых рамок (например, блок количества на той же строке)
+    # давала шаг в пару пикселей, и все восстановленные строки прилипали к соседу.
+    steps = sorted(b[1] - a[1] for a, b in zip(boxes, boxes[1:], strict=False)
+                   if b[1] - a[1] >= height * 0.5)
+    step = statistics.median(steps) if steps else height * 1.6
     gap = max(0.0, step - height)
     out: list = []
     for index, (reward, box) in enumerate(pairs):
-        if box is None:
+        if not box or (box[3] - box[1]) <= 2:
             previous = next((b for _r, b in reversed(out) if b), None)
             following = next((b for _r, b in pairs[index + 1:] if b), None)
             reference = previous or following
@@ -949,15 +1014,24 @@ def read_lines_multi(image, engines: list) -> list:
     from aldur_appraiser.localize import match_name
 
     collected: list = []
+    last_error: Exception | None = None
     for engine in engines:
         try:
             collected.extend(line for line in engine.lines(image) if line.text.strip())
-        except Exception:  # noqa: BLE001 — одно увеличение может не сработать
+        except Exception as exc:  # noqa: BLE001 — одно увеличение может не сработать
+            last_error = exc
             continue
+    if not collected and last_error is not None:
+        # Раньше оба прохода могли упасть молча: на экране просто ничего не
+        # появлялось, а в журнале не было ни строки. Теперь причина видна.
+        print(f"[{time.strftime('%H:%M:%S')}] распознавание не удалось: "
+              f"{type(last_error).__name__}: {last_error}", flush=True)
     if len(engines) < 2 or not collected:
         return sorted(collected, key=lambda ln: ln.top)
 
-    # Группируем строки разных проходов, попавшие на одну высоту.
+    # Группируем строки разных проходов, попавшие на одну высоту И в те же
+    # столбцы: без проверки по X в одну группу попадали название и отдельный
+    # блок количества/уровня, и один из них терялся вместе с количеством.
     collected.sort(key=lambda ln: (ln.top, ln.box[0] if ln.box else 0.0))
     groups: list[list] = []
     for line in collected:
@@ -967,7 +1041,9 @@ def read_lines_multi(image, engines: list) -> list:
             if first.box and line.box:
                 overlap = (min(first.box[3], line.box[3]) - max(first.box[1], line.box[1]))
                 height = min(first.box[3] - first.box[1], line.box[3] - line.box[1])
-                if height > 0 and overlap > 0.5 * height:
+                same_column = (min(first.box[2], line.box[2])
+                               - max(first.box[0], line.box[0])) > 0
+                if height > 0 and overlap > 0.5 * height and same_column:
                     group.append(line)
                     placed = True
                     break
@@ -1001,7 +1077,14 @@ def dedupe_overlapping(lines: list) -> list:
     Распознавание иногда возвращает одну и ту же строку дважды с чуть разными
     рамками (например, текст игрового интерфейса внизу панели). Две такие записи
     давали две строки наград и две плашки «?».
+
+    Строки считаются одной, только если они перекрываются И по вертикали, И по
+    горизонтали, а текст похож. Раньше хватало вертикали: название и отдельная
+    колонка количества на той же высоте сливались в одну, количество терялось, а
+    у двустрочных строк камней пропадала соседняя награда целиком.
     """
+    from rapidfuzz import fuzz
+
     out: list = []
     for line in sorted(lines, key=lambda ln: ln.top):
         duplicate = False
@@ -1011,6 +1094,14 @@ def dedupe_overlapping(lines: list) -> list:
             overlap = min(line.box[3], other.box[3]) - max(line.box[1], other.box[1])
             height = min(line.box[3] - line.box[1], other.box[3] - other.box[1])
             if height <= 0 or overlap <= 0.5 * height:
+                continue
+            if min(line.box[2], other.box[2]) - max(line.box[0], other.box[0]) <= 0:
+                continue          # разные столбцы — это разные строки панели
+            left = line.text.casefold()
+            right = other.text.casefold()
+            similar = (left in right or right in left
+                       or fuzz.ratio(left, right) >= 70)
+            if not similar:
                 continue
             # Та же строка: выбираем более длинное прочтение.
             if len(line.text) > len(other.text):
@@ -1036,17 +1127,25 @@ def drop_detached_tail(lines: list, *, factor: float = 4.0) -> list:
     if len(ordered) < 3:
         return ordered
     gap = [ordered[i + 1].top - ordered[i].top for i in range(len(ordered) - 1)]
-    positive = [value for value in gap if value > 1.0]
+    positive = sorted(value for value in gap if value > 1.0)
     if not positive:
         return ordered
-    typical = sorted(positive)[len(positive) // 2]
+    # Типичный шаг — из НИЖНЕЙ половины промежутков: на 4–5 строках один
+    # случайный большой отступ становится «медианой» и режет весь список.
+    typical = positive[len(positive) // 4]
     if typical <= 0:
         return ordered
     out = [ordered[0]]
-    for line in ordered[1:]:
+    for position, line in enumerate(ordered[1:], start=1):
         step = line.top - out[-1].top
         if step > typical * factor:
-            break          # список закончился: дальше только интерфейс игры
+            # Режем только настоящий «хвост интерфейса»: за большим разрывом
+            # должен идти ещё один большой. Иначе один отступ (бонусная награда,
+            # случайная строка посреди списка) уносил все награды ниже.
+            rest = ordered[position + 1:]
+            tail_gap = (rest[1].top - rest[0].top) if len(rest) >= 2 else None
+            if tail_gap is not None and tail_gap > typical * factor:
+                break
         out.append(line)
     return out
 
@@ -1107,8 +1206,11 @@ def layout_is_sane(rows) -> tuple[bool, str]:
     if median_height <= 0:
         return False, "нулевая высота строк"
 
-    # 1. Слишком разные высоты: строки склеены или разрезаны.
-    if max(heights) > median_height * 1.6:
+    # 1. Слишком разные высоты: строки склеены или разрезаны. Одна высокая
+    # строка — это законная двустрочная награда камня, поэтому допускаем
+    # ровно один выброс.
+    tall = [height for height in heights if height > median_height * 1.6]
+    if len(tall) > 1:
         return False, (f"высота строк различается "
                        f"({heights[0]:.0f}..{heights[-1]:.0f} при типичной "
                        f"{median_height:.0f})")
@@ -1124,9 +1226,14 @@ def layout_is_sane(rows) -> tuple[bool, str]:
         typical = sorted(body)[len(body) // 2]
         if max(body) > typical * 1.8:
             return False, f"рваный шаг строк ({typical:.0f} и {max(body):.0f})"
-    # 3. Строки налезают друг на друга.
-    for index in range(len(tops) - 1):
-        if tops[index + 1] - tops[index] < median_height * 0.5:
+    # 3. Строки налезают друг на друга. Проверяем только строки, которые
+    # пересекаются по горизонтали: название и отдельная колонка количества на
+    # одной высоте — это две части одной награды, а не «налезание».
+    ordered = sorted(boxes, key=lambda box: box[1])
+    for first, second in zip(ordered, ordered[1:], strict=False):
+        if min(first[2], second[2]) - max(first[0], second[0]) <= 0:
+            continue
+        if second[1] - first[1] < median_height * 0.5:
             return False, "строки налезают друг на друга"
     return True, ""
 
@@ -1200,7 +1307,9 @@ def measure_text_band(frame: np.ndarray, box: tuple) -> tuple[float, float] | No
         return None
     active = ink > max(3.0, float(ink.max()) * 0.35)
 
-    # Разбиваем на полосы и берём последнюю (нижнюю) — там длинное имя.
+    # Разбиваем на полосы и берём самую «чернильную» из высоких: у награды с
+    # двойной рамкой снизу бывает орнамент, а последняя полоса оказывалась
+    # декоративной линией или верхом следующей строки — плашка уезжала.
     bands: list[tuple[int, int]] = []
     start = None
     for index, flag in enumerate(active):
@@ -1211,10 +1320,15 @@ def measure_text_band(frame: np.ndarray, box: tuple) -> tuple[float, float] | No
             start = None
     if start is not None:
         bands.append((start, len(active)))
-    bands = [band for band in bands if band[1] - band[0] >= 3]
+    minimum = max(4, int((y1 - y0) * 0.35))
+    bands = [band for band in bands if band[1] - band[0] >= max(4, minimum // 2)]
     if not bands:
         return None
-    top, bottom = bands[-1]
+    top, bottom = max(bands, key=lambda band: float(ink[band[0]:band[1]].sum()))
+    if bottom - top < 5:
+        # Слишком тонкая полоса — это не строка текста. Оставляем рамку как есть,
+        # чтобы плашка не встала на границу.
+        return None
     return y0 + float(top), y0 + float(bottom)
 
 
@@ -1521,7 +1635,7 @@ def draw_rows(painter, rows, *, rates: dict[str, float], status: str, size,
             color = C_UNKNOWN
         painter.setPen(QPen(QColor(*color)))
         cursor = rect.left() + pad
-        for (text, code), segment_width in zip(segments, widths):
+        for (text, code), segment_width in zip(segments, widths, strict=True):
             if code and code in icons:
                 pixmap = icons[code].scaled(int(icon_size), int(icon_size),
                                             Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -1568,12 +1682,15 @@ def render_to_file(image_path: str, out_path: str, *, league: str = "", monitor:
     appraiser = Appraiser(prices)
     rows, status, _ = appraiser.run(frame)
     for reward, value, _, note in rows:
-        shown = f"{value:,.1f} exalted" if value else "?"
-        if note:
-            shown = f"{note} · {shown}"
+        if value is None and note:
+            shown = note            # оценка диапазоном: подпись и есть ответ
+        else:
+            shown = format_value(value, prices.book._rates)
+            if note:
+                shown = f"{note} · {shown}"
         print(f"  {reward.raw:44s} -> {shown}")
 
-    app = QApplication.instance() or QApplication(sys.argv[:1])
+    QApplication.instance() or QApplication(sys.argv[:1])
     h, w = frame.shape[:2]
     qimg = QImage(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).data, w, h, 3 * w,
                   QImage.Format_RGB888)
@@ -1585,7 +1702,11 @@ def render_to_file(image_path: str, out_path: str, *, league: str = "", monitor:
               panel_height=appraiser.panel.h if appraiser.panel else None,
               panel_right=panel_border_x(appraiser.panel))
     painter.end()
-    canvas.save(out_path)
+    if not canvas.save(out_path):
+        # Раньше неудачное сохранение молчало, и проверка «картинка готова»
+        # проходила, хотя файла не было.
+        print(f"не удалось сохранить картинку: {out_path}")
+        return 3
     print(f"картинка с ценами: {out_path}")
     return 0
 
@@ -1600,9 +1721,16 @@ def ask_league_dialog(current: str, ask_next_time: bool):
     фоновое сканирование, которое стартует вместе с загрузкой цен.
     """
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
-                                   QDialogButtonBox, QLabel, QPushButton,
-                                   QVBoxLayout)
+    from PySide6.QtWidgets import (
+        QApplication,
+        QCheckBox,
+        QComboBox,
+        QDialog,
+        QDialogButtonBox,
+        QLabel,
+        QPushButton,
+        QVBoxLayout,
+    )
 
     dialog = QDialog()
     dialog.setWindowTitle("Лига для поиска по базе")
@@ -1749,7 +1877,11 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
             except Exception:  # noqa: BLE001 — без крестика работаем как раньше
                 self.crest = None
             self.busy = False
-            self.gem_busy = False
+            # Очередь догрузки цен: даже если предыдущая догрузка ещё идёт,
+            # новое нажатие не теряется — задача ждёт своей очереди.
+            self._fetch_lock = threading.Lock()
+            self._fetch_queue: list = []
+            self._fetch_thread: threading.Thread | None = None
             # Когда снова можно спрашивать цену камня: неудачный запрос не
             # повторяется на каждом перечитывании панели, иначе трейд получает
             # один и тот же поиск десятки раз подряд.
@@ -1828,6 +1960,12 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
 
             try:
                 frame, _ = capture(monitor)
+                # Свои плашки затираем так же, как перед чтением панели:
+                # иначе отпечаток области считается по картинке С плашками, а
+                # сохранённый — по картинке БЕЗ них. Разница всегда выше порога,
+                # список считался «изменённым», и панель перечитывалась каждые
+                # 600 мс: «…» не успевало превратиться в цену.
+                frame = blank_rects(frame, self.badge_rects)
                 panel = detector.find_panel(frame)
             except Exception:  # noqa: BLE001 — сбой захвата не должен ронять показ
                 return
@@ -1881,7 +2019,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 # распознавание приклеит наши цифры к названию и цена «уедет».
                 frame = blank_rects(frame, self.badge_rects)
                 rows, status, signature = self.appraiser.run(
-                    frame, price_gems=False, panel=panel, detect=False)
+                    frame, price_gems=False, panel=panel, detect=panel is None)
                 self.generation += 1
                 self.rows = list(rows)
                 self.signature = signature
@@ -1895,6 +2033,13 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                     self.row_centers.clear()
                 # Запоминаем, где панель: по этому месту следим за крестиком.
                 if panel is not None:
+                    previous_panel = self.panel_box
+                    if (previous_panel is not None
+                            and (abs(previous_panel.x - panel.x) > 4
+                                 or abs(previous_panel.y - panel.y) > 4)):
+                        # Панель сдвинулась (окно игры переехало, другой экран):
+                        # прежние центры плашек больше не годятся.
+                        self.row_centers.clear()
                     self.panel_box = panel
                 pending = Appraiser.gem_indices(self.rows)
                 live_extra = Appraiser.bulk_indices(self.rows, prices.book)
@@ -1930,7 +2075,24 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                     self.start_gem_worker(fetch, self.generation)
                 else:
                     self.pending = set()
-                priced = sum(1 for _, v, _b, _n in self.rows if v)
+                # Считаем цену только там, где она действительно есть: 0 тоже
+                # цена, поэтому проверка «is not None», а не «истинно/ложно».
+                priced = sum(1 for _, v, _b, _n in self.rows if v is not None)
+                heights = sorted(b[3] - b[1] for _r, _v, b, _n in self.rows if b)
+                hint = heights[len(heights) // 2] if heights else 0
+                # Пустая плашка «?» должна быть объяснима в журнале: раньше
+                # причина (нет в таблицах / нет лота / оценка) нигде не писалась,
+                # и «цена не появилась» приходилось ловить по снимкам экрана.
+                unpriced = []
+                for index, (reward, value, _box, _note) in enumerate(self.rows):
+                    if value is not None or reward.kind == "estimate":
+                        continue
+                    where = "ждёт ответа" if index in self.pending else "нет в таблицах"
+                    unpriced.append(f"{reward.ru_name or reward.en_name or reward.raw}"
+                                    f" ({reward.kind}, {where})")
+                if unpriced:
+                    print(f"[{time.strftime('%H:%M:%S')}] без цены: "
+                          + "; ".join(unpriced[:10]), flush=True)
                 heights = sorted(b[3] - b[1] for _r, _v, b, _n in self.rows if b)
                 hint = heights[len(heights) // 2] if heights else 0
                 # Самопроверка: раскладка должна быть ровной. Если нет — молча
@@ -1984,59 +2146,97 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                     self.repaint()
 
         def start_gem_worker(self, indices: list[int], generation: int) -> None:
-            """Цены камней тянет трейд-сайт по одному — в фоне, с показом по мере готовности."""
-            if self.gem_busy:
-                return
-            self.gem_busy = True
-            snapshot = list(self.rows)
+            """Ставит догрузку цен в очередь и запускает поток, если он свободен.
 
-            def work() -> None:
+            Раньше при работающей догрузке новое нажатие молча выбрасывалось:
+            поток не запускался, «…» на строках висело до следующего нажатия, и
+            цена так и не появлялась. Теперь задача не теряется — она ждёт
+            окончания текущей, а устаревшее поколение (панель уже перечитана)
+            прерывается, чтобы не тратить лимит трейда на невидимые строки.
+            """
+            task = (generation, list(indices), list(self.rows))
+            with self._fetch_lock:
+                self._fetch_queue.append(task)
+                if self._fetch_thread is not None and self._fetch_thread.is_alive():
+                    return
+                self._fetch_thread = threading.Thread(target=self.run_fetch_queue,
+                                                     daemon=True)
+                self._fetch_thread.start()
+
+        def run_fetch_queue(self) -> None:
+            """Выполняет задачи догрузки по одной, пока очередь не опустеет."""
+            while True:
+                with self._fetch_lock:
+                    if not self._fetch_queue:
+                        self._fetch_thread = None
+                        return
+                    generation, indices, snapshot = self._fetch_queue.pop(0)
                 try:
-                    for position, index in enumerate(indices):
-                        reward = snapshot[index][0]
-                        key = Appraiser.gem_key(reward)
-                        if self.scan_active():
-                            # Держим фоновый проход на паузе всё время, пока
-                            # идёт поиск по нажатию: он не должен занимать лимит.
-                            request_pause(90.0)
-                        value = prices.price(reward)
-                        if value:
-                            # Цена уже записана в кэш самим price(): следующее
-                            # нажатие берёт её с диска без запроса.
-                            self.gem_retry_at.pop(key, None)
-                            value *= max(1, reward.qty)   # стоимость всего лота
-                            self.gemPriced.emit(generation, index, float(value), "")
-                            continue
-                        # Поиск не удался — запоминаем, когда можно повторить,
-                        # чтобы панель не отправляла тот же поиск заново.
-                        error = prices.last_trade_error()
-                        limit_hit = "429" in error
-                        self.gem_retry_at[key] = time.monotonic() + (
-                            GEM_LIMIT_COOLDOWN if limit_hit else GEM_RETRY_COOLDOWN)
-                        if limit_hit:
-                            # Лимит трейда общий на IP: остальные камни этой
-                            # панели сейчас тоже не ответят — не тратим запросы.
-                            for rest in indices[position + 1:]:
+                    self.fetch_prices(generation, indices, snapshot)
+                except Exception as exc:  # noqa: BLE001 — одна задача не должна
+                    # останавливать очередь: иначе цены больше не догрузятся.
+                    self.prices._note_price_error("догрузка цен", exc)
+
+        def fetch_prices(self, generation: int, indices: list[int],
+                         snapshot: list) -> None:
+            """Догружает цены указанных строк; результат приходит сигналом."""
+            try:
+                for position, index in enumerate(indices):
+                    if generation != self.generation:
+                        # Панель перечитана: эти строки уже не на экране.
+                        return
+                    if not (0 <= index < len(snapshot)):
+                        continue
+                    reward = snapshot[index][0]
+                    key = Appraiser.gem_key(reward)
+                    if self.scan_active():
+                        # Держим фоновый проход на паузе всё время, пока
+                        # идёт поиск по нажатию: он не должен занимать лимит.
+                        request_pause(90.0)
+                    value = prices.price(reward)
+                    if value:
+                        # Цена уже записана в кэш самим price(): следующее
+                        # нажатие берёт её с диска без запроса.
+                        self.gem_retry_at.pop(key, None)
+                        value *= max(1, reward.qty)   # стоимость всего лота
+                        self.gemPriced.emit(generation, index, float(value), "")
+                        continue
+                    # Поиск не удался — запоминаем, когда можно повторить,
+                    # чтобы панель не отправляла тот же поиск заново.
+                    error = prices.last_trade_error()
+                    limit_hit = "429" in error
+                    self.gem_retry_at[key] = time.monotonic() + (
+                        GEM_LIMIT_COOLDOWN if limit_hit else GEM_RETRY_COOLDOWN)
+                    if limit_hit:
+                        # Лимит трейда общий на IP: остальные камни этой
+                        # панели сейчас тоже не ответят — не тратим запросы.
+                        for rest in indices[position + 1:]:
+                            if 0 <= rest < len(snapshot):
                                 self.gem_retry_at[Appraiser.gem_key(snapshot[rest][0])] = \
                                     self.gem_retry_at[key]
-                            break
-                finally:
-                    self.gem_busy = False
-                    # Цены догружены: если что-то получить не удалось, «…» больше
-                    # не висит — такие строки честно показывают «?».
-                    self.pricesDone.emit(generation)
+                        break
+            finally:
+                # Цены догружены: если что-то получить не удалось, «…» больше
+                # не висит — такие строки честно показывают «?».
+                self.pricesDone.emit(generation)
 
-            threading.Thread(target=work, daemon=True).start()
+        def clear_pending_status(self) -> None:
+            """Убирает из строки состояния счётчик камней, ждущих цену."""
+            marker = " | камней без свежей цены:"
+            if marker in self.status:
+                self.status = self.status.split(marker)[0]
 
         def finish_prices(self, generation: int) -> None:
             """Догрузка цен закончилась: убираем «…», оставляя честные «?»."""
-            clear_pause()   # действие человека закончилось — фон может работать
             if generation != self.generation:
+                # Панель уже перечитана: пауза фонового прохода принадлежит
+                # текущей задаче, и снимать её отсюда нельзя.
                 return
+            clear_pause()   # действие человека закончилось — фон может работать
             if self.pending:
                 self.pending.clear()
-                self.status = self.status.split(" | камней в очереди")[0]
-                self.repaint()
+            self.clear_pending_status()
+            self.repaint()
 
         def apply_gem_price(self, generation: int, index: int, value: float,
                             note: str = "") -> None:
@@ -2045,7 +2245,7 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
             reward, _, box, old_note = self.rows[index]
             self.rows[index] = (reward, value, box, note or old_note)
             self.pending.discard(index)
-            self.status = self.status.split(" | камней в очереди")[0]
+            self.clear_pending_status()
             self.repaint()
 
         def paintEvent(self, event) -> None:  # noqa: N802 (Qt API)
@@ -2159,9 +2359,17 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
 
     def build_settings_dialog():
         """Собирает окно настроек. Возвращает диалог и словарь его полей."""
-        from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                                       QDoubleSpinBox, QFormLayout, QLabel, QLineEdit,
-                                       QVBoxLayout)
+        from PySide6.QtWidgets import (
+            QCheckBox,
+            QComboBox,
+            QDialog,
+            QDialogButtonBox,
+            QDoubleSpinBox,
+            QFormLayout,
+            QLabel,
+            QLineEdit,
+            QVBoxLayout,
+        )
 
         dialog = QDialog()
         dialog.setWindowTitle("Настройки PoE2 RU Overlay")
@@ -2285,8 +2493,9 @@ def run_live(*, hotkey: str, league: str, monitor: int, selftest: float = 0.0,
                 visible,
                 result == 0,
             ]
-            print("[самотест] окно настроек: "
-                  f"{'построено, поверх всех, открылось и закрылось' if all(checks) else 'НЕПОЛНОЕ'}"
+            verdict = ("построено, поверх всех, открылось и закрылось"
+                       if all(checks) else "НЕПОЛНОЕ")
+            print(f"[самотест] окно настроек: {verdict}"
                   f" (поверх={topmost}, показано={visible}, цикл окна вернул {result})",
                   flush=True)
         except Exception as exc:  # noqa: BLE001
@@ -2669,8 +2878,11 @@ def main(argv: list[str] | None = None) -> int:
                 _stream.reconfigure(encoding="utf-8", errors="replace")
             except (AttributeError, ValueError, OSError):
                 pass
-    parser = argparse.ArgumentParser(prog="ru_app", description="PoE2 RU Overlay — цены наград")
-    parser.add_argument("--hotkey", default="", help=f"горячая клавиша (по умолчанию {DEFAULT_HOTKEY})")
+    parser = argparse.ArgumentParser(
+        prog="ru_app", description="PoE2 RU Overlay — цены наград")
+    parser.add_argument(
+        "--hotkey", default="",
+        help=f"горячая клавиша (по умолчанию {DEFAULT_HOTKEY})")
     parser.add_argument("--league", default="", help="лига (по умолчанию автоопределение)")
     parser.add_argument("--ask-league", dest="ask_league", action="store_true", default=None,
                         help="спросить лигу при запуске (по умолчанию — как в настройках)")

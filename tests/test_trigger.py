@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import socket
 import time
 
+import pytest
+
 from aldur_appraiser import trigger
+
+# Сокет AF_UNIX есть не в каждой сборке Windows: без него проверка IPC
+# невозможна, и раньше весь набор падал с AttributeError вместо пропуска.
+pytestmark = pytest.mark.skipif(not hasattr(socket, "AF_UNIX"),
+                                reason="в этой сборке Python нет AF_UNIX")
 
 
 def test_serve_and_send_roundtrip(tmp_path, monkeypatch):
