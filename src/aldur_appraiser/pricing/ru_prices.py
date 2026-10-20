@@ -664,13 +664,16 @@ class PriceBook:
         # найденный по Shift+D камень уже есть, и терять его нельзя.
         if not self._book and not self._scout and not self._gems:
             return
-        with self._save_lock:
-            try:
-                self._merge_gems_from_disk()
-            except Exception:  # noqa: BLE001 — слияние не должно мешать записи
-                pass
-            try:
-                with self._lock:
+        # Порядок захвата строго «_lock, затем _save_lock». Наоборот нельзя:
+        # price_gem() держит _lock и вызывает сохранение — при обратном порядке
+        # два потока ждали бы друг друга навсегда.
+        with self._lock:
+            with self._save_lock:
+                try:
+                    self._merge_gems_from_disk()
+                except Exception:  # noqa: BLE001 — слияние не должно мешать записи
+                    pass
+                try:
                     # Снимок словарей: их меняет и поток цен, и загрузка рынка.
                     payload = json.dumps({
                         "league": self.league,
@@ -692,16 +695,16 @@ class PriceBook:
                         "exchange_at": self._exchange_at,
                         "scout_at": self._scout_at,
                     }, ensure_ascii=False)
-                self._write_cache_file(self._cache_file, payload)
-                # Общий prices.json остаётся «текущим рынком»: на него смотрят
-                # проверка свежести и внешние инструменты.
-                shared = self._shared_cache_file
-                if shared != self._cache_file:
-                    self._write_cache_file(shared, payload)
-            except (OSError, RuntimeError, TypeError, ValueError):
-                # RuntimeError — словарь изменился во время сериализации:
-                # следующая запись пройдёт, терять из-за этого всё незачем.
-                pass
+                    self._write_cache_file(self._cache_file, payload)
+                    # Общий prices.json остаётся «текущим рынком»: на него
+                    # смотрят проверка свежести и внешние инструменты.
+                    shared = self._shared_cache_file
+                    if shared != self._cache_file:
+                        self._write_cache_file(shared, payload)
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    # RuntimeError — словарь изменился во время сериализации:
+                    # следующая запись пройдёт, терять из-за этого всё незачем.
+                    pass
 
     @staticmethod
     def _read_cache_json(path: Path) -> dict | None:
