@@ -828,3 +828,68 @@ def test_junk_rune_cap_leaves_cheaper_prices_alone() -> None:
 
     assert book.exchange_price("Lesser Mind Rune", live=False) == 0.4
     assert book.exchange_price("Body Rune", live=False) == 30.0
+
+
+MASTERWORK_PATH = "Metadata/Items/SoulCores/RuneUpgrade"
+CHARM_PATH = "Metadata/Items/Currency/CurrencyAddModToRare"
+CHAOS_PATH = "Metadata/Items/Currency/CurrencyRerollRare"
+DIVINE_PATH = "Metadata/Items/Currency/CurrencyModValues"
+
+
+def _book_with_masterwork_pairs() -> PriceBook:
+    """«Мастерская руна»: тонкая пара с Exalted и плотная с Divine.
+
+    Живой замер 21.10.2026: пара с Exalted — 356..727 exalted за 6 сделок,
+    пара с Divine — 1..2 divine за 304 сделки, средняя poe.ninja — 727.23.
+    """
+    book = PriceBook(league="Forbidden Rites")
+    book._rates = {"exalted": 1.0, "chaos": 69.99, "divine": 693.6}
+    book._ids = {"Masterwork Rune": "masterwork-rune", "Chaos Orb": "chaos",
+                 "Divine Orb": "divine"}
+    book._base_ids = {"Masterwork Rune": MASTERWORK_PATH}
+    book._loaded_names = {MASTERWORK_PATH: "Masterwork Rune",
+                          CHARM_PATH: "Exalted Orb",
+                          CHAOS_PATH: "Chaos Orb",
+                          DIVINE_PATH: "Divine Orb"}
+    book._exchange_pairs = {MASTERWORK_PATH: [
+        (CHAOS_PATH, 9.0, 11.0, 107),
+        (DIVINE_PATH, 1.0, 2.0, 304),
+        (CHARM_PATH, 356.0, 727.0, 6),
+    ]}
+    book._book["Masterwork Rune"] = 727.23
+    book._save_cache = lambda: None
+    return book
+
+
+def test_snapshot_pair_with_the_most_trades_wins() -> None:
+    """Пара снимка выбирается по числу сделок, а не по валюте.
+
+    Раньше первой возвращалась любая пара с Exalted, и шесть её сделок
+    перебивали триста четыре сделки пары с Divine.
+    """
+    book = _book_with_masterwork_pairs()
+
+    assert round(book.snapshot_unit("Masterwork Rune") or 0) == 694
+
+
+def test_dense_pair_does_not_rewrite_the_ninja_average() -> None:
+    """Плотная пара рядом со средней подтверждает её, а не переписывает.
+
+    Иначе цена руны гуляла между 727 и 694 на каждой перерисовке. Одинокий лот
+    сайта «1 chaos» тоже не должен становиться ценой: у предмета 418 лотов.
+    """
+    book = _book_with_masterwork_pairs()
+    book._scout["Masterwork Rune"] = 816.13
+    book._scout_volume["Masterwork Rune"] = 418
+    book.price_item_trade = lambda _name, **_kw: 70.0
+
+    assert book.exchange_price("Masterwork Rune") == 727.23
+
+
+def test_thin_pair_without_dense_neighbour_still_lowers_the_average() -> None:
+    """Без плотной пары тонкая пара по-прежнему понижает среднюю."""
+    book = _book_with_masterwork_pairs()
+    book._book["Masterwork Rune"] = 4000.0
+    book._exchange_pairs[MASTERWORK_PATH] = [(CHARM_PATH, 356.0, 727.0, 6)]
+
+    assert book.exchange_price("Masterwork Rune", live=False) == 356.0

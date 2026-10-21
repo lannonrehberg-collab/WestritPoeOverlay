@@ -120,6 +120,12 @@ MAX_OFFICIAL_SPREAD = 2.0
 # (обычная цена предмета), у «мусорных» часов бывает 39× (Divine 20..779 ex) —
 # такую пару нельзя выдавать за цену.
 MAX_SNAPSHOT_PAIR_SPREAD = 2.5
+# Плотная пара снимка (десятки сделок) и средняя poe.ninja расходятся на
+# проценты, потому что это одна и та же цена, посчитанная по-разному. Понижать
+# среднюю в этом случае нельзя: цена начинает гулять между «727» и «694» при
+# каждой перерисовке. Снимок переписывает среднюю, только если он дешевле её
+# больше чем на четверть (то есть это действительно другая цена, а не шум).
+SNAPSHOT_AGREES_RATIO = 1.25
 # Живая заявка трейд-сайта не может быть дороже рынка больше чем втрое: у
 # ходовых валют и рун в обменнике попадаются предложения вида «1 divine за одну
 # сферу усиления», и медиана трёх самых дешёвых заявок делает такую цену
@@ -1798,15 +1804,20 @@ class PriceBook:
         """Официальный часовой снимок обменника: (низ, верх, сделок, валюта).
 
         Снимок — это агрегат реально состоявшихся сделок за час, а не список
-        заявок. Пара с Exalted даёт цену напрямую; для предметов, которые за
-        Exalted не торгуются (Зеркало, Прядь Хинекоры), цена берётся из пары с
-        Divine или Chaos и переводится по курсу. Возвращаются границы сделок в
-        exalted за штуку.
+        заявок. Возвращаются границы сделок в exalted за штуку.
+
+        Пара выбирается по ЧИСЛУ СДЕЛОК, а не по валюте. Раньше первой
+        возвращалась любая пара с Exalted, даже на шести сделках, хотя рядом
+        лежала пара с Divine на триста сделок: у «Мастерской руны» 21.10.2026
+        пара с Exalted дала 356–727 ex за 6 сделок, а пара с Divine — 1–2
+        divine за 304 сделки. Тонкая пара потом ещё и уступала одинокому лоту
+        сайта «1 chaos». Пара с Exalted выигрывает только при равном числе
+        сделок: она измеряет цену напрямую, без пересчёта по курсу.
         """
         path = self._base_ids.get(en_name)
         if not path:
             return None
-        best: tuple[float, float, int, str] | None = None
+        candidates: list[tuple[int, bool, float, float, str]] = []
         for other_path, low, high, traded in self._exchange_pairs.get(path, []):
             if traded < MIN_OFFICIAL_TRADES:
                 continue
@@ -1816,14 +1827,16 @@ class PriceBook:
             ex_low, ex_high = low * other, high * other
             if ex_low <= 0:
                 continue
-            if other_path == EXALTED_PATH:
-                return (ex_low, ex_high, traded, "exalted")
+            exact = other_path == EXALTED_PATH
+            unit = "exalted" if exact else str(
+                self._ids.get(self._loaded_names.get(other_path) or "") or "")
             # Пары без Exalted грубее (3 совершенные сферы за 1 divine), но это
-            # единственная официальная цена таких предметов.
-            if best is None or traded > best[2]:
-                best = (ex_low, ex_high, traded,
-                        str(self._ids.get(self._loaded_names.get(other_path) or "") or ""))
-        return best
+            # официальная цена предметов, которые за Exalted не торгуются.
+            candidates.append((traded, exact, ex_low, ex_high, unit))
+        if not candidates:
+            return None
+        traded, _exact, low, high, unit = max(candidates, key=lambda c: (c[0], c[1]))
+        return (low, high, traded, unit)
 
     def snapshot_unit(self, en_name: str) -> float | None:
         """Самая низкая цена сделки по официальному снимку обменника.
@@ -1906,8 +1919,8 @@ class PriceBook:
         # 1. Основа — средняя poe.ninja.
         baseline = self._book.get(en_name)
         base = float(baseline) if baseline and baseline > 0 else None
-        # 2. Официальный снимок: пара с Exalted измеряет цену напрямую в exalted,
-        #    остальные пары (Divine, Chaos) грубее пересчитываются по курсу.
+        # 2. Официальный снимок: пара выбирается по числу сделок, цена внутри
+        #    пары пересчитывается в exalted по курсу её второй валюты.
         snap: float | None = None
         thin = False
         snap_pair = self.snapshot_price(en_name)
@@ -1920,9 +1933,18 @@ class PriceBook:
                 # нетипичную сделку в ней от рынка не отличить. Такую цену
                 # проверяем по самому дешёвому лоту сайта, а не берём как есть.
                 thin = traded <= THIN_PAIR_TRADES
+        # Рядом лежит плотная пара — значит у предмета есть настоящий рынок, и
+        # расхождение со средней на несколько процентов это шум, а не другая
+        # цена. Такое расхождение среднюю не переписывает.
+        path = self._base_ids.get(en_name) or ""
+        dense = any(traded >= THIN_PAIR_TRADES
+                    for _p, _low, _high, traded in self._exchange_pairs.get(path, []))
         trusted: float | None = base
-        if snap is not None and (trusted is None or snap < trusted):
-            trusted = snap
+        if snap is not None:
+            if trusted is None:
+                trusted = snap
+            elif snap < trusted and (not dense or snap * SNAPSHOT_AGREES_RATIO < trusted):
+                trusted = snap
         if trusted is not None:
             if thin and live:
                 live_price = self._cheaper_live_listing(en_name, trusted)
