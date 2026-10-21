@@ -590,25 +590,30 @@ def test_finished_scan_is_never_stale(tmp_path, monkeypatch) -> None:
 
 
 def _book_with_thin_rune_pair() -> PriceBook:
-    """Книга цен с парой снимка «Малая руна ледника»: 5 chaos за штуку, 5 сделок."""
+    """Книга цен с парой снимка «Безупречная руна ледника»: 5 chaos, 5 сделок.
+
+    Взят безупречный тир: у малого, обычного и большого тиров стандартных рун
+    есть потолок ``JUNK_RUNE_CAP_EX``, а здесь проверяется выбор источника
+    цены, а не потолок.
+    """
     book = PriceBook(league="Forbidden Rites")
     book._rates = {"exalted": 1.0, "chaos": 68.68696479543291, "divine": 721.9}
-    book._ids = {"Lesser Glacial Rune": "lesser-glacial-rune",
+    book._ids = {"Perfect Glacial Rune": "perfect-glacial-rune",
                  "Chaos Orb": "chaos"}
     book._base_ids = {
-        "Lesser Glacial Rune": "Metadata/Items/SoulCores/RuneColdLesser"}
+        "Perfect Glacial Rune": "Metadata/Items/SoulCores/RuneColdPerfect"}
     book._loaded_names = {
-        "Metadata/Items/SoulCores/RuneColdLesser": "Lesser Glacial Rune",
+        "Metadata/Items/SoulCores/RuneColdPerfect": "Perfect Glacial Rune",
         "Metadata/Items/Currency/CurrencyRerollRare": "Chaos Orb",
     }
-    book._exchange_pairs = {"Metadata/Items/SoulCores/RuneColdLesser": [
+    book._exchange_pairs = {"Metadata/Items/SoulCores/RuneColdPerfect": [
         ("Metadata/Items/Currency/CurrencyRerollRare", 5.0, 5.0, 5)]}
     book._save_cache = lambda: None
     return book
 
 
 def test_thin_snapshot_pair_yields_to_the_cheap_site_listing() -> None:
-    """«Малая руна ледника»: снимок давал 5 chaos, сайт продаёт её за 5 exalted.
+    """«Руна ледника»: снимок давал 5 chaos, сайт продаёт её за 5 exalted.
 
     Пара официального снимка стояла ровно на пороге значимости (5 сделок за
     час), и уровень задавала одна нетипичная сделка — 5 chaos за штуку. Самый
@@ -618,8 +623,8 @@ def test_thin_snapshot_pair_yields_to_the_cheap_site_listing() -> None:
     book = _book_with_thin_rune_pair()
     book.price_item_trade = lambda _name, **_kw: 5.0
 
-    assert round(book.snapshot_unit("Lesser Glacial Rune") or 0) == 343
-    assert book.exchange_price("Lesser Glacial Rune") == 5.0
+    assert round(book.snapshot_unit("Perfect Glacial Rune") or 0) == 343
+    assert book.exchange_price("Perfect Glacial Rune") == 5.0
 
 
 def test_thin_snapshot_pair_survives_when_the_site_agrees() -> None:
@@ -627,18 +632,18 @@ def test_thin_snapshot_pair_survives_when_the_site_agrees() -> None:
     book = _book_with_thin_rune_pair()
     book.price_item_trade = lambda _name, **_kw: 200.0
 
-    assert book.exchange_price("Lesser Glacial Rune") == 343.43482397716457
+    assert book.exchange_price("Perfect Glacial Rune") == 343.43482397716457
 
 
 def test_full_snapshot_pair_is_not_rechecked_on_the_site() -> None:
     """За плотной парой стоят сотни сделок: сайт не спрашиваем вообще."""
     book = _book_with_thin_rune_pair()
-    book._exchange_pairs["Metadata/Items/SoulCores/RuneColdLesser"] = [
+    book._exchange_pairs["Metadata/Items/SoulCores/RuneColdPerfect"] = [
         ("Metadata/Items/Currency/CurrencyRerollRare", 5.0, 5.0, 400)]
     asked: list[str] = []
     book.price_item_trade = lambda name, **_kw: asked.append(name) or 5.0
 
-    assert book.exchange_price("Lesser Glacial Rune") == 343.43482397716457
+    assert book.exchange_price("Perfect Glacial Rune") == 343.43482397716457
     assert asked == []
 
 
@@ -650,10 +655,10 @@ def test_thin_snapshot_pair_falls_back_to_the_ninja_average() -> None:
     недоступны, ценой становится ориентир ninja, а не одиночная сделка.
     """
     book = _book_with_thin_rune_pair()
-    book._book["Lesser Glacial Rune"] = 34.0935
+    book._book["Perfect Glacial Rune"] = 34.0935
     book.price_item_trade = lambda _name, **_kw: None
 
-    assert book.exchange_price("Lesser Glacial Rune") == 34.0935
+    assert book.exchange_price("Perfect Glacial Rune") == 34.0935
 
 
 def test_ninja_average_is_the_base_and_the_snapshot_only_lowers_it() -> None:
@@ -664,33 +669,33 @@ def test_ninja_average_is_the_base_and_the_snapshot_only_lowers_it() -> None:
     может её только понизить.
     """
     book = _book_with_thin_rune_pair()
-    book._book["Lesser Glacial Rune"] = 34.0935
+    book._book["Perfect Glacial Rune"] = 34.0935
     book.price_item_trade = lambda _name, **_kw: None
 
-    assert book.exchange_price("Lesser Glacial Rune") == 34.0935
+    assert book.exchange_price("Perfect Glacial Rune") == 34.0935
 
 
 def test_cheap_snapshot_pair_lowers_the_ninja_average() -> None:
     """Плотная пара снимка дешевле основы — берём цену реальной сделки."""
     book = _book_with_thin_rune_pair()
-    book._book["Lesser Glacial Rune"] = 500.0
-    book._exchange_pairs["Metadata/Items/SoulCores/RuneColdLesser"] = [
+    book._book["Perfect Glacial Rune"] = 500.0
+    book._exchange_pairs["Metadata/Items/SoulCores/RuneColdPerfect"] = [
         ("Metadata/Items/Currency/CurrencyAddModToRare", 1.0, 1.0, 400)]
     book.price_item_trade = lambda _name, **_kw: None
 
-    assert book.exchange_price("Lesser Glacial Rune") == 1.0
+    assert book.exchange_price("Perfect Glacial Rune") == 1.0
 
 
 def test_dense_snapshot_pair_ignores_the_ninja_average() -> None:
     """Плотная пара снимка дороже основы: основу не поднимаем, сайт не спрашиваем."""
     book = _book_with_thin_rune_pair()
-    book._book["Lesser Glacial Rune"] = 1.0
-    book._exchange_pairs["Metadata/Items/SoulCores/RuneColdLesser"] = [
+    book._book["Perfect Glacial Rune"] = 1.0
+    book._exchange_pairs["Metadata/Items/SoulCores/RuneColdPerfect"] = [
         ("Metadata/Items/Currency/CurrencyRerollRare", 5.0, 5.0, 400)]
     asked: list[str] = []
     book.price_item_trade = lambda name, **_kw: asked.append(name) or 5.0
 
-    assert book.exchange_price("Lesser Glacial Rune") == 1.0
+    assert book.exchange_price("Perfect Glacial Rune") == 1.0
     assert asked == []
 
 
@@ -701,11 +706,11 @@ def test_chaos_pair_of_a_cheap_rune_is_capped_by_the_ninja_average() -> None:
     Exalted стоила 1 exalted. Основа — средние 34.09 exalted (0.5 chaos).
     """
     book = _book_with_thin_rune_pair()
-    book._book["Lesser Glacial Rune"] = 34.0935
+    book._book["Perfect Glacial Rune"] = 34.0935
     book.price_item_trade = lambda _name, **_kw: None
 
-    assert book.snapshot_unit("Lesser Glacial Rune") == 343.43482397716457
-    assert book.exchange_price("Lesser Glacial Rune") == 34.0935
+    assert book.snapshot_unit("Perfect Glacial Rune") == 343.43482397716457
+    assert book.exchange_price("Perfect Glacial Rune") == 34.0935
 
 
 def test_thin_scout_aggregate_yields_to_the_site_listing() -> None:
@@ -715,23 +720,23 @@ def test_thin_scout_aggregate_yields_to_the_site_listing() -> None:
     3–50 exalted. Ценой становится лот сайта.
     """
     book = _book_with_thin_rune_pair()
-    book._scout["Lesser Glacial Rune"] = 40155.87
-    book._scout_volume["Lesser Glacial Rune"] = 1
+    book._scout["Perfect Glacial Rune"] = 40155.87
+    book._scout_volume["Perfect Glacial Rune"] = 1
     book.price_item_trade = lambda _name, **_kw: 5.0
 
-    assert book.exchange_price("Lesser Glacial Rune") == 5.0
+    assert book.exchange_price("Perfect Glacial Rune") == 5.0
 
 
 def test_dense_scout_aggregate_is_taken_as_is() -> None:
     """Плотный агрегат (объём выше порога) цену задаёт сам, сайт не спрашиваем."""
     book = _book_with_thin_rune_pair()
     book._exchange_pairs = {}          # снимок цену не знает — остаётся агрегат
-    book._scout["Lesser Glacial Rune"] = 40.0
-    book._scout_volume["Lesser Glacial Rune"] = 50
+    book._scout["Perfect Glacial Rune"] = 40.0
+    book._scout_volume["Perfect Glacial Rune"] = 50
     asked: list[str] = []
     book.price_item_trade = lambda name, **_kw: asked.append(name) or 5.0
 
-    assert book.exchange_price("Lesser Glacial Rune") == 40.0
+    assert book.exchange_price("Perfect Glacial Rune") == 40.0
     assert asked == []
 
 
@@ -743,19 +748,19 @@ def test_thin_scout_aggregate_without_site_lots_has_no_price() -> None:
     """
     book = _book_with_thin_rune_pair()
     book._exchange_pairs = {}
-    book._scout["Lesser Glacial Rune"] = 40155.87
-    book._scout_volume["Lesser Glacial Rune"] = 1
+    book._scout["Perfect Glacial Rune"] = 40155.87
+    book._scout_volume["Perfect Glacial Rune"] = 1
     book.price_item_trade = lambda _name, **_kw: None
 
-    assert book.exchange_price("Lesser Glacial Rune") is None
+    assert book.exchange_price("Perfect Glacial Rune") is None
 
 
 def test_thin_scout_aggregate_survives_a_trade_site_outage() -> None:
     """Лимит сайта (429) — не «лотов нет»: ориентир остаётся, цена не пропадает."""
     book = _book_with_thin_rune_pair()
     book._exchange_pairs = {}
-    book._scout["Lesser Glacial Rune"] = 30.0
-    book._scout_volume["Lesser Glacial Rune"] = 1
+    book._scout["Perfect Glacial Rune"] = 30.0
+    book._scout_volume["Perfect Glacial Rune"] = 1
 
     def blocked(_name, **_kw):
         book._last_trade_error = "поиск вернул HTTP 429"
@@ -763,7 +768,7 @@ def test_thin_scout_aggregate_survives_a_trade_site_outage() -> None:
 
     book.price_item_trade = blocked
 
-    assert book.exchange_price("Lesser Glacial Rune") == 30.0
+    assert book.exchange_price("Perfect Glacial Rune") == 30.0
 
 
 def test_exchange_offer_cache_is_not_used_as_a_site_listing() -> None:
@@ -775,8 +780,51 @@ def test_exchange_offer_cache_is_not_used_as_a_site_listing() -> None:
     import time
 
     book = _book_with_thin_rune_pair()
-    book._gems["item|Lesser Glacial Rune"] = (343.0, time.time())
+    book._gems["item|Perfect Glacial Rune"] = (343.0, time.time())
     book._listing_prices = lambda *_args, **_kwargs: [("exalted", 5.0)]
 
-    assert book.price_item_trade("Lesser Glacial Rune") == 5.0
-    assert book._gems["listing|Lesser Glacial Rune"][0] == 5.0
+    assert book.price_item_trade("Perfect Glacial Rune") == 5.0
+    assert book._gems["listing|Perfect Glacial Rune"][0] == 5.0
+
+
+def _junk_cap_book(book_prices: dict[str, float]) -> PriceBook:
+    book = PriceBook(league="Forbidden Rites")
+    book._book = dict(book_prices)
+    book._save_cache = lambda: None
+    return book
+
+
+def test_junk_rune_cap_limits_standard_tiers_only() -> None:
+    """Потолок 30 exalted: мусорные тиры стандартных рун, но не безупречные.
+
+    «Руна разума» показывалась за 375 exalted (0.54 divine), потому что к концу
+    лиги у неё осталась одна сделка «1 divine». Безупречные руны, сплавы и
+    особые руны в потолок не входят: у них есть подтверждённый объём сделок.
+    """
+    from aldur_appraiser.pricing.ru_prices import JUNK_RUNE_CAP_EX
+
+    book = _junk_cap_book({
+        "Mind Rune": 375.7,
+        "Greater Mind Rune": 900.0,
+        "Perfect Mind Rune": 1973.9,
+        "Masterwork Rune": 727.2,
+        "Greater Rune of Leadership": 2174.8,
+        "Runic Alloy": 295.9,
+    })
+
+    assert JUNK_RUNE_CAP_EX == 30.0
+    assert book.exchange_price("Mind Rune", live=False) == 30.0
+    assert book.price_item("Mind Rune", live=False) == 30.0
+    assert book.exchange_price("Greater Mind Rune", live=False) == 30.0
+    assert book.exchange_price("Perfect Mind Rune", live=False) == 1973.9
+    assert book.exchange_price("Masterwork Rune", live=False) == 727.2
+    assert book.exchange_price("Greater Rune of Leadership", live=False) == 2174.8
+    assert book.exchange_price("Runic Alloy", live=False) == 295.9
+
+
+def test_junk_rune_cap_leaves_cheaper_prices_alone() -> None:
+    """Ниже потолка цена не меняется: режется только завышенная."""
+    book = _junk_cap_book({"Lesser Mind Rune": 0.4, "Body Rune": 37.6})
+
+    assert book.exchange_price("Lesser Mind Rune", live=False) == 0.4
+    assert book.exchange_price("Body Rune", live=False) == 30.0

@@ -153,6 +153,24 @@ RANDOM_CURRENCY_BASKET = (
     "Lesser Jeweller's Orb", "Gemcutter's Prism",
 )
 
+# Стандартные семейства рун: у них есть малые, обычные, большие и безупречные
+# тиры, и к концу лиги их почти никто не выставляет. Оставшийся единственный лот
+# вида «1 divine за руну» агрегатор выдаёт за рыночную цену, и мусор показывался
+# дороже настоящего: живой замер 21.10.2026 — «Руна разума» 375 exalted (0.54
+# divine) при реальных 30 exalted за штуку. Потолок ниже применяется только к
+# мусорным тирам (малый, обычный, большой) этих семейств. Безупречные руны,
+# сплавы и особые руны в потолок не входят: у них бывает настоящий спрос и
+# подтверждённый объём сделок (Masterwork Rune — 816 exalted при 418 лотах).
+JUNK_RUNE_CAP_EX = 30.0
+STANDARD_RUNE_FAMILIES = frozenset({
+    "Mind Rune", "Body Rune", "Iron Rune", "Stone Rune", "Ward Rune",
+    "Resolve Rune", "Robust Rune", "Adept Rune", "Charging Rune",
+    "Glacial Rune", "Storm Rune", "Vision Rune", "Rebirth Rune",
+    "Desert Rune", "Inspiration Rune",
+})
+# Приставки мусорных тиров. «Perfect » сюда не входит намеренно.
+_JUNK_RUNE_PREFIXES = ("Lesser ", "Greater ")
+
 # Запасные правила, если сервер не прислал заголовки. Взяты из ответов PoE2:
 # поиск — 5/10 с, 15/60 с, 30/300 с, 600/6 ч; обмен — 5/15 с, 10/90 с, 30/300 с.
 DEFAULT_RULES: dict[str, list[tuple[int, int, int]]] = {
@@ -165,6 +183,29 @@ DEFAULT_RULES: dict[str, list[tuple[int, int, int]]] = {
 MAX_INLINE_WAIT = 20.0
 # Сколько вообще готовы ждать внутри запроса (цены считаются в фоновом потоке).
 INLINE_WAIT_LIMIT = 120.0
+
+
+def is_junk_rune(en_name: str) -> bool:
+    """Мусорный тир стандартной руны: малая, обычная или большая."""
+    if not en_name:
+        return False
+    name = ru_to_en().get(en_name, en_name) or en_name
+    for prefix in _JUNK_RUNE_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return name in STANDARD_RUNE_FAMILIES
+
+
+def junk_rune_cap(en_name: str, price: float | None) -> float | None:
+    """Потолок цены для мусорного тира стандартной руны.
+
+    Иначе одна уцелевшая сделка (1 divine за руну) делала цену мусора в десять
+    раз выше настоящей. Безупречные руны, сплавы и особые руны не ограничены.
+    """
+    if price is None or not is_junk_rune(en_name):
+        return price
+    return min(float(price), JUNK_RUNE_CAP_EX)
 
 
 def _slugify(name: str) -> str:
@@ -1678,6 +1719,14 @@ class PriceBook:
         return None
 
     def price_item(self, en_name: str, *, live: bool = True) -> float | None:
+        """Цена предмета с потолком для мусорных тиров стандартных рун.
+
+        Потолок накладывается здесь, а не на источники: они остаются честными,
+        а панель и каталог получают цену, за которую предмет реально уходит.
+        """
+        return junk_rune_cap(en_name, self._price_item_uncapped(en_name, live=live))
+
+    def _price_item_uncapped(self, en_name: str, *, live: bool = True) -> float | None:
         """Цена предмета: заявки игрового обменника, затем таблицы.
 
         live=False — только таблицы, без обращения к обменнику: так первый показ
@@ -1822,6 +1871,14 @@ class PriceBook:
 
     def exchange_price(self, en_name: str, *, live_conflict: bool = False,
                        live: bool = True) -> float | None:
+        """Цена обменного предмета с потолком для мусорных тиров рун."""
+        return junk_rune_cap(
+            en_name,
+            self._exchange_price_uncapped(en_name, live_conflict=live_conflict, live=live),
+        )
+
+    def _exchange_price_uncapped(self, en_name: str, *, live_conflict: bool = False,
+                                 live: bool = True) -> float | None:
         """Цена обменного предмета — самая низкая цена, по которой он уходит.
 
         Основа — средняя poe.ninja (``_book``): она считается по настоящим
